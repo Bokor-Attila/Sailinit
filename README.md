@@ -4,6 +4,7 @@ A Go-based tool to automate the initialization of Laravel Sail projects with int
 
 ## Features
 
+- **New Project Creation**: Create a new Laravel project from scratch with `--new`.
 - **Automated Dependency Install**: Runs Composer via Docker (no local PHP needed).
 - **Collision-Free Ports**: Automatically allocates unique ports for each project.
 - **Interactive Suffix Selection**: Suggests the next available port suffix and allows manual overrides.
@@ -64,6 +65,7 @@ sailinit [flags] [php_version]
 | `--down` | Run `sail down` in the current project |
 | `--fresh` | Force re-run composer install even if `vendor/bin/sail` exists |
 | `--reset-db` | Reset database settings to Sail defaults (mysql, laravel, sail/password) |
+| `--new <name>` | Create a new Laravel project and set it up with Sail |
 | `--dry-run` | Show what would happen without making changes |
 
 ### Arguments
@@ -76,7 +78,10 @@ sailinit [flags] [php_version]
 ### Examples
 
 ```bash
-# Auto-detects PHP version
+# Create a brand new Laravel project with Sail + MySQL
+sailinit --new my-blog
+
+# Auto-detects PHP version (run inside an existing project)
 sailinit
 
 # Print version
@@ -111,6 +116,9 @@ sailinit --reset-db
 
 # Preview what would happen without making any changes
 sailinit --dry-run
+
+# Preview new project creation without making any changes
+sailinit --new my-blog --dry-run
 ```
 
 ### Project List Output
@@ -135,6 +143,23 @@ Project                                   Suffix  App Port  Containers
 /Users/user/projects/blog                 51      8051      3 running
 /Users/user/projects/shop                 52      8052      stopped
 ```
+
+## Creating New Projects
+
+The `--new` flag creates a brand new Laravel project from scratch using [Laravel's build service](https://laravel.build):
+
+```bash
+sailinit --new my-blog
+```
+
+This runs the following steps automatically:
+1. Downloads and creates the project via `curl -s "https://laravel.build/my-blog?with=mysql" | bash`
+2. Stops the default containers that Laravel's installer starts
+3. Assigns a unique port suffix (with the usual interactive prompt)
+4. Configures `.env` with collision-free ports
+5. Starts the project with `sail up -d`
+
+The only prerequisite is Docker — no local PHP or Composer needed.
 
 ## Colored Output
 

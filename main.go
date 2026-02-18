@@ -60,6 +60,7 @@ func main() {
 	freshFlag := flag.Bool("fresh", false, "Force re-run composer install even if vendor/bin/sail exists")
 	resetDbFlag := flag.Bool("reset-db", false, "Reset database settings to Sail defaults (mysql, laravel, sail/password)")
 	dryRunFlag := flag.Bool("dry-run", false, "Show what would happen without making changes")
+	newFlag := flag.String("new", "", "Create a new Laravel project with the given name (e.g. --new my-blog)")
 	flag.Parse()
 
 	// Handle --version flag
@@ -135,6 +136,47 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	}
+
+	// Handle --new flag: create a new Laravel project
+	if *newFlag != "" {
+		projectName := *newFlag
+		printHeader(fmt.Sprintf("Creating new Laravel project: %s", projectName))
+
+		if *dryRunFlag {
+			printInfo(fmt.Sprintf("[dry-run] Would run: curl -s \"https://laravel.build/%s?with=mysql\" | bash", projectName))
+			printInfo(fmt.Sprintf("[dry-run] Would then set up ports in ./%s", projectName))
+			os.Exit(0)
+		}
+
+		if err := createNewProject(projectName); err != nil {
+			printError(fmt.Sprintf("Error creating project: %v", err))
+			os.Exit(1)
+		}
+
+		// Change into the new project directory for the rest of the setup
+		newDir := filepath.Join(".", projectName)
+		absDir, err := filepath.Abs(newDir)
+		if err != nil {
+			printError(fmt.Sprintf("Error resolving project path: %v", err))
+			os.Exit(1)
+		}
+		if err := os.Chdir(absDir); err != nil {
+			printError(fmt.Sprintf("Error changing to project directory: %v", err))
+			os.Exit(1)
+		}
+
+		printSuccess(fmt.Sprintf("Project created at %s", absDir))
+		printInfo("Configuring ports...")
+
+		// Stop containers started by laravel.build so we can reconfigure ports
+		sailPath := filepath.Join(absDir, "vendor", "bin", "sail")
+		if _, err := os.Stat(sailPath); err == nil {
+			stopCmd := exec.Command(sailPath, "down")
+			stopCmd.Stdout = os.Stdout
+			stopCmd.Stderr = os.Stderr
+			stopCmd.Run() // best-effort
+		}
 	}
 
 	// Main setup flow
@@ -346,6 +388,22 @@ func handleList() {
 		)
 	}
 	w.Flush()
+}
+
+func createNewProject(name string) error {
+	// Check the directory doesn't already exist
+	if _, err := os.Stat(name); err == nil {
+		return fmt.Errorf("directory %q already exists", name)
+	}
+
+	url := fmt.Sprintf("https://laravel.build/%s?with=mysql", name)
+	printInfo(fmt.Sprintf("Downloading from %s ...", url))
+
+	cmd := exec.Command("bash")
+	cmd.Stdin = strings.NewReader(fmt.Sprintf(`curl -s "%s" | bash`, url))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func runSailInit(phpVersion, projectDir string, forceInstall bool) error {
