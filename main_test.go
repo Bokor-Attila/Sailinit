@@ -125,3 +125,70 @@ func TestRunSailInitRunsWithFreshFlag(t *testing.T) {
 		t.Errorf("Expected docker execution error, got: %v", err)
 	}
 }
+
+func TestVersionDefault(t *testing.T) {
+	if version != "dev" {
+		t.Errorf("Expected default version %q, got %q", "dev", version)
+	}
+}
+
+func TestRunSailStopNoSail(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "sail-stop-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	err = runSailStop(tempDir)
+	if err == nil {
+		t.Error("Expected error when sail binary doesn't exist")
+	}
+	if err != nil && !strings.Contains(err.Error(), "sail binary not found") {
+		t.Errorf("Expected 'sail binary not found' error, got: %v", err)
+	}
+}
+
+func TestRunSailDownNoSail(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "sail-down-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	err = runSailDown(tempDir)
+	if err == nil {
+		t.Error("Expected error when sail binary doesn't exist")
+	}
+	if err != nil && !strings.Contains(err.Error(), "sail binary not found") {
+		t.Errorf("Expected 'sail binary not found' error, got: %v", err)
+	}
+}
+
+func TestRunSailUpNoSail(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "sail-up-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	err = runSailUp(tempDir)
+	if err == nil {
+		t.Error("Expected error when sail binary doesn't exist")
+	}
+	if err != nil && !strings.Contains(err.Error(), "sail binary not found") {
+		t.Errorf("Expected 'sail binary not found' error, got: %v", err)
+	}
+}
+
+func TestGetContainerStatusNoSail(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "sail-status-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	status := getContainerStatus(tempDir)
+	if status != "no sail" {
+		t.Errorf("Expected %q, got %q", "no sail", status)
+	}
+}

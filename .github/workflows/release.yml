@@ -45,10 +45,12 @@ jobs:
       
       - name: Build Binaries
         run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          LDFLAGS="-X main.version=${VERSION}"
           mkdir -p bin
-          GOOS=linux GOARCH=amd64 go build -o bin/sailinit-linux-amd64 .
-          GOOS=darwin GOARCH=amd64 go build -o bin/sailinit-macos-amd64 .
-          GOOS=darwin GOARCH=arm64 go build -o bin/sailinit-macos-arm64 .
+          GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o bin/sailinit-linux-amd64 .
+          GOOS=darwin GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o bin/sailinit-macos-amd64 .
+          GOOS=darwin GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o bin/sailinit-macos-arm64 .
           
       - name: Create Release
         uses: softprops/action-gh-release@v2

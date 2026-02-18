@@ -3,10 +3,85 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// MaxPortSuffix is the highest valid suffix (65535 - 18100, the highest base port)
+const MaxPortSuffix = 47435
+
+// ValidateSuffix checks that a port suffix is within valid range.
+func ValidateSuffix(suffix int) error {
+	if suffix < 0 {
+		return fmt.Errorf("suffix must be non-negative, got %d", suffix)
+	}
+	if suffix > MaxPortSuffix {
+		return fmt.Errorf("suffix %d too large: highest port would be %d (max 65535)", suffix, 18100+suffix)
+	}
+	return nil
+}
+
+// CheckPortAvailable returns true if the given TCP port is not in use.
+func CheckPortAvailable(port int) bool {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
+}
+
+// BusyPort holds info about an unavailable port.
+type BusyPort struct {
+	Name string
+	Port int
+}
+
+// CheckSuffixPortsAvailable checks all 7 ports for a suffix and returns busy ones.
+func CheckSuffixPortsAvailable(suffix int) []BusyPort {
+	ports := []struct {
+		name string
+		port int
+	}{
+		{"APP_PORT", 8000 + suffix},
+		{"FORWARD_DB_PORT", 3300 + suffix},
+		{"FORWARD_REDIS_PORT", 6300 + suffix},
+		{"FORWARD_MEILISEARCH_PORT", 7700 + suffix},
+		{"FORWARD_MAILPIT_DASHBOARD_PORT", 18100 + suffix},
+		{"FORWARD_MAILPIT_PORT", 1000 + suffix},
+		{"VITE_PORT", 5100 + suffix},
+	}
+
+	var busy []BusyPort
+	for _, p := range ports {
+		if !CheckPortAvailable(p.port) {
+			busy = append(busy, BusyPort{Name: p.name, Port: p.port})
+		}
+	}
+	return busy
+}
+
+// RemoveProject removes a project from the port state file.
+func RemoveProject(projectDir string) error {
+	state, _, err := loadPortState()
+	if err != nil {
+		return err
+	}
+
+	absDir, err := filepath.Abs(projectDir)
+	if err != nil {
+		return err
+	}
+
+	if _, ok := state.Projects[absDir]; !ok {
+		return fmt.Errorf("project not registered: %s", absDir)
+	}
+
+	delete(state.Projects, absDir)
+	return state.save()
+}
 
 type PortState struct {
 	MaxSuffix int            `json:"max_suffix"`
