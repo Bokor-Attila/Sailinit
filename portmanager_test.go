@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,12 +231,6 @@ func TestSetupEnvNewEnvGetsDbSettings(t *testing.T) {
 }
 
 func TestIsSuffixInUseByOther(t *testing.T) {
-	// We need to mock the state file.
-	// Since getPortStatePath is tied to UserHomeDir,
-	// for unit tests we should ideally refactor to accept a path,
-	// but for now we'll rely on the logic itself.
-	// Actually, let's just test the splitLines since it's used everywhere.
-
 	lines := splitLines("line1\nline2\r\nline3")
 	if len(lines) != 3 {
 		t.Errorf("Expected 3 lines, got %d", len(lines))
@@ -439,6 +434,7 @@ func TestCleanOrphanedProjectsNoneToClean(t *testing.T) {
 		t.Errorf("Expected 2 projects remaining, got %d", len(projects))
 	}
 }
+
 func TestLoadPortStateExisted(t *testing.T) {
 	_, cleanup := setupTestState(t)
 	defer cleanup()
@@ -510,5 +506,128 @@ func TestGetSuggestedSuffixFirstSetup(t *testing.T) {
 	}
 	if suffix != 48 {
 		t.Errorf("Expected suffix 48, got %d", suffix)
+	}
+}
+
+func TestValidateSuffix(t *testing.T) {
+	tests := []struct {
+		suffix  int
+		wantErr bool
+	}{
+		{0, false},
+		{48, false},
+		{47435, false},
+		{47436, true},
+		{-1, true},
+		{100000, true},
+	}
+
+	for _, tt := range tests {
+		err := ValidateSuffix(tt.suffix)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("ValidateSuffix(%d): got err=%v, wantErr=%v", tt.suffix, err, tt.wantErr)
+		}
+	}
+}
+
+func TestRemoveProject(t *testing.T) {
+	tempDir, cleanup := setupTestState(t)
+	defer cleanup()
+
+	projectDir := filepath.Join(tempDir, "my-project")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Register the project
+	if err := saveProjectSuffix(projectDir, 48); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify it was saved
+	projects, _ := ListProjects()
+	if len(projects) != 1 {
+		t.Fatalf("Expected 1 project, got %d", len(projects))
+	}
+
+	// Remove it
+	if err := RemoveProject(projectDir); err != nil {
+		t.Fatalf("RemoveProject failed: %v", err)
+	}
+
+	// Verify it's gone
+	projects, _ = ListProjects()
+	if len(projects) != 0 {
+		t.Errorf("Expected 0 projects after removal, got %d", len(projects))
+	}
+}
+
+func TestRemoveProjectNotRegistered(t *testing.T) {
+	tempDir, cleanup := setupTestState(t)
+	defer cleanup()
+
+	projectDir := filepath.Join(tempDir, "not-registered")
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RemoveProject(projectDir)
+	if err == nil {
+		t.Error("Expected error when removing unregistered project")
+	}
+	if err != nil && !strings.Contains(err.Error(), "not registered") {
+		t.Errorf("Expected 'not registered' error, got: %v", err)
+	}
+}
+
+func TestCheckPortAvailable(t *testing.T) {
+	// An unused high port should be available
+	if !CheckPortAvailable(59123) {
+		t.Skip("Port 59123 unexpectedly in use, skipping")
+	}
+
+	// Occupy a port and check
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	if CheckPortAvailable(port) {
+		t.Errorf("Port %d should be unavailable (occupied by test listener)", port)
+	}
+}
+
+func TestCheckSuffixPortsAvailable(t *testing.T) {
+	// With a very high suffix that won't conflict with anything running
+	busy := CheckSuffixPortsAvailable(59000)
+	// We can't guarantee no ports are busy, but we can check the return type
+	_ = busy // just verify it doesn't panic
+
+	// Occupy one port in a suffix range and verify it's detected
+	ln, err := net.Listen("tcp", ":0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	port := ln.Addr().(*net.TCPAddr).Port
+	// If the occupied port happens to be 8000+suffix for some suffix, check it
+	if port > 8000 {
+		testSuffix := port - 8000
+		if testSuffix >= 0 && testSuffix <= MaxPortSuffix {
+			busy = CheckSuffixPortsAvailable(testSuffix)
+			found := false
+			for _, bp := range busy {
+				if bp.Port == port {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Expected port %d to be reported as busy", port)
+			}
+		}
 	}
 }

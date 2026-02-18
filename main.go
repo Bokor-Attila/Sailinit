@@ -10,7 +10,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"text/tabwriter"
 )
+
+var version = "dev"
 
 func detectPHPVersion(projectDir string) string {
 	files := []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
@@ -47,36 +50,35 @@ func detectPHPVersion(projectDir string) string {
 }
 
 func main() {
+	versionFlag := flag.Bool("version", false, "Print version and exit")
 	listFlag := flag.Bool("list", false, "List all registered projects with their port suffixes")
+	statusFlag := flag.Bool("status", false, "Show status of all registered projects")
 	cleanFlag := flag.Bool("clean", false, "Remove entries for project directories that no longer exist")
+	removeFlag := flag.Bool("remove", false, "Remove the current project from port registry")
+	stopFlag := flag.Bool("stop", false, "Run sail stop in the current project")
+	downFlag := flag.Bool("down", false, "Run sail down in the current project")
 	freshFlag := flag.Bool("fresh", false, "Force re-run composer install even if vendor/bin/sail exists")
 	resetDbFlag := flag.Bool("reset-db", false, "Reset database settings to Sail defaults (mysql, laravel, sail/password)")
+	dryRunFlag := flag.Bool("dry-run", false, "Show what would happen without making changes")
 	flag.Parse()
+
+	// Handle --version flag
+	if *versionFlag {
+		fmt.Printf("sailinit %s\n", version)
+		os.Exit(0)
+	}
 
 	// Handle --list flag
 	if *listFlag {
-		projects, err := ListProjects()
-		if err != nil {
-			fmt.Printf("Error listing projects: %v\n", err)
+		handleList()
+		os.Exit(0)
+	}
+
+	// Handle --status flag
+	if *statusFlag {
+		if err := showProjectStatus(); err != nil {
+			printError(fmt.Sprintf("Error showing status: %v", err))
 			os.Exit(1)
-		}
-		if len(projects) == 0 {
-			fmt.Println("No registered projects found.")
-			os.Exit(0)
-		}
-
-		// Sort by suffix for consistent output
-		sort.Slice(projects, func(i, j int) bool {
-			return projects[i].Suffix < projects[j].Suffix
-		})
-
-		fmt.Printf("     %-40s %-8s %s\n", "Project", "Suffix", "App Port")
-		for _, p := range projects {
-			prefix := "    "
-			if !p.Exists {
-				prefix = "[X]"
-			}
-			fmt.Printf("%s  %-40s %-8d %d\n", prefix, p.Path, p.Suffix, 8000+p.Suffix)
 		}
 		os.Exit(0)
 	}
@@ -85,16 +87,60 @@ func main() {
 	if *cleanFlag {
 		count, err := CleanOrphanedProjects()
 		if err != nil {
-			fmt.Printf("Error cleaning orphaned projects: %v\n", err)
+			printError(fmt.Sprintf("Error cleaning orphaned projects: %v", err))
 			os.Exit(1)
 		}
-		fmt.Printf("Cleaned %d orphaned project(s)\n", count)
+		printSuccess(fmt.Sprintf("Cleaned %d orphaned project(s)", count))
 		os.Exit(0)
 	}
 
+	// Handle --remove flag
+	if *removeFlag {
+		projectDir, err := os.Getwd()
+		if err != nil {
+			printError(fmt.Sprintf("Error getting current directory: %v", err))
+			os.Exit(1)
+		}
+		if err := RemoveProject(projectDir); err != nil {
+			printError(fmt.Sprintf("Error removing project: %v", err))
+			os.Exit(1)
+		}
+		printSuccess("Project removed from port registry.")
+		os.Exit(0)
+	}
+
+	// Handle --stop flag
+	if *stopFlag {
+		projectDir, err := os.Getwd()
+		if err != nil {
+			printError(fmt.Sprintf("Error getting current directory: %v", err))
+			os.Exit(1)
+		}
+		if err := runSailStop(projectDir); err != nil {
+			printError(fmt.Sprintf("Error stopping sail: %v", err))
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	// Handle --down flag
+	if *downFlag {
+		projectDir, err := os.Getwd()
+		if err != nil {
+			printError(fmt.Sprintf("Error getting current directory: %v", err))
+			os.Exit(1)
+		}
+		if err := runSailDown(projectDir); err != nil {
+			printError(fmt.Sprintf("Error running sail down: %v", err))
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	// Main setup flow
 	projectDir, err := os.Getwd()
 	if err != nil {
-		fmt.Printf("Error getting current directory: %v\n", err)
+		printError(fmt.Sprintf("Error getting current directory: %v", err))
 		os.Exit(1)
 	}
 
@@ -106,7 +152,7 @@ func main() {
 	if len(args) > 0 {
 		phpVersion = args[0]
 		if detectedVersion != "" && phpVersion != detectedVersion {
-			fmt.Printf("Warning: Manually specified PHP version (%s) differs from detected version in compose file (%s).\n", phpVersion, detectedVersion)
+			printWarning(fmt.Sprintf("Warning: Manually specified PHP version (%s) differs from detected version in compose file (%s).", phpVersion, detectedVersion))
 			fmt.Print("Continue anyway? [y/N]: ")
 			var confirm string
 			fmt.Scanln(&confirm)
@@ -116,21 +162,21 @@ func main() {
 		}
 	} else if detectedVersion != "" {
 		phpVersion = detectedVersion
-		fmt.Printf("Detected PHP version: %s\n", phpVersion)
+		printInfo(fmt.Sprintf("Detected PHP version: %s", phpVersion))
 	} else {
-		fmt.Printf("No PHP version detected. Using default: %s\n", phpVersion)
+		printInfo(fmt.Sprintf("No PHP version detected. Using default: %s", phpVersion))
 	}
 
-	fmt.Printf("Starting Laravel Sail setup for PHP %s...\n", phpVersion)
+	printHeader(fmt.Sprintf("Starting Laravel Sail setup for PHP %s...", phpVersion))
 	suggested, existing, existed, err := getSuggestedSuffix(projectDir)
 	if err != nil {
-		fmt.Printf("Error determining suffix: %v\n", err)
+		printError(fmt.Sprintf("Error determining suffix: %v", err))
 		os.Exit(1)
 	}
 
 	reader := bufio.NewReader(os.Stdin)
 	if !existed && !existing {
-		fmt.Println("First-ever setup detected.")
+		printInfo("First-ever setup detected.")
 		for {
 			fmt.Print("Enter the starting port suffix for your projects [default 48]: ")
 			input, _ := reader.ReadString('\n')
@@ -142,7 +188,11 @@ func main() {
 			var startSuffix int
 			_, err := fmt.Sscanf(input, "%d", &startSuffix)
 			if err != nil {
-				fmt.Println("Invalid suffix. Please enter a number.")
+				printError("Invalid suffix. Please enter a number.")
+				continue
+			}
+			if err := ValidateSuffix(startSuffix); err != nil {
+				printError(fmt.Sprintf("Invalid suffix: %v", err))
 				continue
 			}
 			suggested = startSuffix
@@ -152,7 +202,7 @@ func main() {
 
 	suffix := suggested
 	if existing {
-		fmt.Printf("Detected existing port suffix: %d\n", suffix)
+		printInfo(fmt.Sprintf("Detected existing port suffix: %d", suffix))
 	}
 
 	for {
@@ -164,7 +214,11 @@ func main() {
 			var newSuffix int
 			_, err := fmt.Sscanf(input, "%d", &newSuffix)
 			if err != nil {
-				fmt.Println("Invalid suffix. Please enter a number.")
+				printError("Invalid suffix. Please enter a number.")
+				continue
+			}
+			if err := ValidateSuffix(newSuffix); err != nil {
+				printError(fmt.Sprintf("Invalid suffix: %v", err))
 				continue
 			}
 			suffix = newSuffix
@@ -172,10 +226,9 @@ func main() {
 
 		// Validate against collisions
 		if otherPath, inUse := isSuffixInUseByOther(projectDir, suffix); inUse {
-			fmt.Printf("Error: Suffix %d is already in use by another project:\n%s\n", suffix, otherPath)
+			printError(fmt.Sprintf("Error: Suffix %d is already in use by another project:\n%s", suffix, otherPath))
 			// Reset suffix to suggested and retry loop but only if user didn't enter it
 			if input == "" {
-				// This shouldn't happen if the suggested one is correct, but for safety:
 				suffix = suggested
 			}
 			continue
@@ -183,46 +236,128 @@ func main() {
 		break
 	}
 
-	// Save the confirmed suffix
-	if err := saveProjectSuffix(projectDir, suffix); err != nil {
-		fmt.Printf("Error saving suffix: %v\n", err)
+	// Check port availability
+	busyPorts := CheckSuffixPortsAvailable(suffix)
+	if len(busyPorts) > 0 {
+		printWarning("Warning: The following ports are already in use:")
+		for _, bp := range busyPorts {
+			printWarning(fmt.Sprintf("  %s: %d", bp.Name, bp.Port))
+		}
+		fmt.Print("Continue anyway? [y/N]: ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if strings.ToLower(confirm) != "y" {
+			os.Exit(0)
+		}
 	}
 
-	fmt.Printf("Using port suffix: %d\n", suffix)
+	// Save the confirmed suffix
+	if *dryRunFlag {
+		printInfo(fmt.Sprintf("[dry-run] Would save suffix %d for project %s", suffix, projectDir))
+	} else {
+		if err := saveProjectSuffix(projectDir, suffix); err != nil {
+			printError(fmt.Sprintf("Error saving suffix: %v", err))
+		}
+	}
+
+	printInfo(fmt.Sprintf("Using port suffix: %d", suffix))
 
 	// 1. Setup .env
-	if err := setupEnv(projectDir, suffix, *resetDbFlag); err != nil {
-		fmt.Printf("Error setting up .env: %v\n", err)
-		os.Exit(1)
+	if *dryRunFlag {
+		printInfo(fmt.Sprintf("[dry-run] Would configure .env with suffix %d", suffix))
+		printInfo(fmt.Sprintf("[dry-run]   APP_PORT=%d", 8000+suffix))
+		printInfo(fmt.Sprintf("[dry-run]   FORWARD_DB_PORT=%d", 3300+suffix))
+		printInfo(fmt.Sprintf("[dry-run]   FORWARD_REDIS_PORT=%d", 6300+suffix))
+		printInfo(fmt.Sprintf("[dry-run]   FORWARD_MEILISEARCH_PORT=%d", 7700+suffix))
+		printInfo(fmt.Sprintf("[dry-run]   FORWARD_MAILPIT_DASHBOARD_PORT=%d", 18100+suffix))
+		printInfo(fmt.Sprintf("[dry-run]   FORWARD_MAILPIT_PORT=%d", 1000+suffix))
+		printInfo(fmt.Sprintf("[dry-run]   VITE_PORT=%d", 5100+suffix))
+	} else {
+		if err := setupEnv(projectDir, suffix, *resetDbFlag); err != nil {
+			printError(fmt.Sprintf("Error setting up .env: %v", err))
+			os.Exit(1)
+		}
 	}
 
 	// 2. Initial sailinit logic (Docker composer install)
-	if err := runSailInit(phpVersion, projectDir, *freshFlag); err != nil {
-		fmt.Printf("Error running sailinit: %v\n", err)
-		os.Exit(1)
+	if *dryRunFlag {
+		printInfo(fmt.Sprintf("[dry-run] Would run composer install via Docker (PHP %s)", phpVersion))
+	} else {
+		if err := runSailInit(phpVersion, projectDir, *freshFlag); err != nil {
+			printError(fmt.Sprintf("Error running sailinit: %v", err))
+			os.Exit(1)
+		}
 	}
 
 	// 3. Run sail up -d
-	if err := runSailUp(projectDir); err != nil {
-		fmt.Printf("Error running sail up: %v\n", err)
-		os.Exit(1)
+	if *dryRunFlag {
+		printInfo("[dry-run] Would run sail up -d")
+	} else {
+		if err := runSailUp(projectDir); err != nil {
+			printError(fmt.Sprintf("Error running sail up: %v", err))
+			os.Exit(1)
+		}
 	}
 
-	fmt.Println("\nSetup complete! Your application is running with the following ports:")
-	fmt.Printf("Main App: http://localhost:%d\n", 8000+suffix)
-	fmt.Printf("Mailpit Dashboard: http://localhost:%d\n", 18100+suffix)
+	printSuccess("\nSetup complete! Your application is running with the following ports:")
+	printInfo(fmt.Sprintf("Main App: http://localhost:%d", 8000+suffix))
+	printInfo(fmt.Sprintf("Mailpit Dashboard: http://localhost:%d", 18100+suffix))
+}
+
+func handleList() {
+	projects, err := ListProjects()
+	if err != nil {
+		printError(fmt.Sprintf("Error listing projects: %v", err))
+		os.Exit(1)
+	}
+	if len(projects) == 0 {
+		printInfo("No registered projects found.")
+		return
+	}
+
+	// Sort by suffix for consistent output
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].Suffix < projects[j].Suffix
+	})
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		colorize(colorBold, "Project"),
+		colorize(colorBold, "Suffix"),
+		colorize(colorBold, "App Port"),
+		colorize(colorBold, "DB Port"),
+		colorize(colorBold, "Redis Port"),
+		colorize(colorBold, "Vite Port"),
+		colorize(colorBold, "Status"),
+	)
+	for _, p := range projects {
+		status := colorize(colorGreen, "OK")
+		if !p.Exists {
+			status = colorize(colorRed, "[X] Missing")
+		}
+		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%s\n",
+			p.Path,
+			p.Suffix,
+			8000+p.Suffix,
+			3300+p.Suffix,
+			6300+p.Suffix,
+			5100+p.Suffix,
+			status,
+		)
+	}
+	w.Flush()
 }
 
 func runSailInit(phpVersion, projectDir string, forceInstall bool) error {
 	sailPath := filepath.Join(projectDir, "vendor", "bin", "sail")
 	if !forceInstall {
 		if _, err := os.Stat(sailPath); err == nil {
-			fmt.Println("vendor/bin/sail already exists, skipping composer install...")
+			printInfo("vendor/bin/sail already exists, skipping composer install...")
 			return nil
 		}
 	}
 
-	fmt.Println("Installing composer dependencies via Docker...")
+	printInfo("Installing composer dependencies via Docker...")
 
 	currentUser := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
 	dockerImage := fmt.Sprintf("laravelsail/php%s-composer:latest", phpVersion)
@@ -248,7 +383,7 @@ func setupEnv(projectDir string, suffix int, resetDb bool) error {
 	envCreated := false
 	if _, err := os.Stat(envPath); os.IsNotExist(err) {
 		envCreated = true
-		fmt.Println("Creating .env from .env.example...")
+		printInfo("Creating .env from .env.example...")
 		if _, err := os.Stat(envExamplePath); err == nil {
 			data, err := os.ReadFile(envExamplePath)
 			if err != nil {
@@ -264,7 +399,7 @@ func setupEnv(projectDir string, suffix int, resetDb bool) error {
 		}
 	}
 
-	fmt.Println("Updating .env configuration...")
+	printInfo("Updating .env configuration...")
 
 	data, err := os.ReadFile(envPath)
 	if err != nil {
@@ -378,7 +513,7 @@ func setupEnv(projectDir string, suffix int, resetDb bool) error {
 }
 
 func runSailUp(projectDir string) error {
-	fmt.Println("Starting Laravel Sail (sail up -d)...")
+	printInfo("Starting Laravel Sail (sail up -d)...")
 
 	sailPath := filepath.Join(projectDir, "vendor", "bin", "sail")
 	if _, err := os.Stat(sailPath); os.IsNotExist(err) {
@@ -390,4 +525,94 @@ func runSailUp(projectDir string) error {
 	cmd.Stderr = os.Stderr
 
 	return cmd.Run()
+}
+
+func runSailStop(projectDir string) error {
+	sailPath := filepath.Join(projectDir, "vendor", "bin", "sail")
+	if _, err := os.Stat(sailPath); os.IsNotExist(err) {
+		return fmt.Errorf("sail binary not found at %s", sailPath)
+	}
+
+	printInfo("Stopping Laravel Sail...")
+	cmd := exec.Command(sailPath, "stop")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func runSailDown(projectDir string) error {
+	sailPath := filepath.Join(projectDir, "vendor", "bin", "sail")
+	if _, err := os.Stat(sailPath); os.IsNotExist(err) {
+		return fmt.Errorf("sail binary not found at %s", sailPath)
+	}
+
+	printInfo("Running sail down...")
+	cmd := exec.Command(sailPath, "down")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func getContainerStatus(projectDir string) string {
+	sailPath := filepath.Join(projectDir, "vendor", "bin", "sail")
+	if _, err := os.Stat(sailPath); os.IsNotExist(err) {
+		return "no sail"
+	}
+
+	cmd := exec.Command(sailPath, "ps", "--format", "{{.State}}")
+	cmd.Dir = projectDir
+	output, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	running := 0
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "running" {
+			running++
+		}
+	}
+
+	if running == 0 {
+		return colorize(colorDim, "stopped")
+	}
+	return colorize(colorGreen, fmt.Sprintf("%d running", running))
+}
+
+func showProjectStatus() error {
+	projects, err := ListProjects()
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		printInfo("No registered projects found.")
+		return nil
+	}
+
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].Suffix < projects[j].Suffix
+	})
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+		colorize(colorBold, "Project"),
+		colorize(colorBold, "Suffix"),
+		colorize(colorBold, "App Port"),
+		colorize(colorBold, "Containers"),
+	)
+	for _, p := range projects {
+		containers := colorize(colorRed, "[X] Missing")
+		if p.Exists {
+			containers = getContainerStatus(p.Path)
+		}
+		fmt.Fprintf(w, "%s\t%d\t%d\t%s\n",
+			p.Path,
+			p.Suffix,
+			8000+p.Suffix,
+			containers,
+		)
+	}
+	w.Flush()
+	return nil
 }
