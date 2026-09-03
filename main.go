@@ -122,7 +122,7 @@ _sailinit() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --json -j --port -p --completion"
+    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --json -j --port -p --upgrade -u --completion"
 
     if [[ ${cur} == -* ]] ; then
         COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
@@ -153,6 +153,7 @@ _sailinit() {
         '(-w --with)'{-w,--with}'[Services to include for new project]:services:'
         '(-j --json)'{-j,--json}'[Output in JSON format]'
         '(-p --port)'{-p,--port}'[Print APP_PORT for current project]'
+        '(-u --upgrade)'{-u,--upgrade}'[Download and install the latest release]'
         '--completion[Generate shell completion script]:shell:(bash zsh fish)'
     )
     _describe -t commands 'sailinit flags' options
@@ -177,6 +178,7 @@ complete -c sailinit -s n -l new -r -d 'Create a new Laravel project'
 complete -c sailinit -s w -l with -r -d 'Services to include (default: mysql)'
 complete -c sailinit -s j -l json -d 'Output in JSON format'
 complete -c sailinit -s p -l port -d 'Print APP_PORT for current project'
+complete -c sailinit -s u -l upgrade -d 'Download and install the latest release'
 complete -c sailinit -l completion -r -f -a 'bash zsh fish' -d 'Generate shell completion script'
 `)
 	default:
@@ -200,6 +202,7 @@ func main() {
 		yesFlag        bool
 		jsonFlag       bool
 		portFlag       bool
+		upgradeFlag    bool
 		newFlag        string
 		withFlag       string
 		completionFlag string
@@ -248,6 +251,9 @@ func main() {
 
 	flag.StringVar(&completionFlag, "completion", "", "Generate shell completion script (bash, zsh, fish)")
 
+	flag.BoolVar(&upgradeFlag, "upgrade", false, "Download and install the latest release over the running binary")
+	flag.BoolVar(&upgradeFlag, "u", false, "Download and install the latest release (shorthand)")
+
 	flag.Parse()
 
 	// Handle --completion flag
@@ -259,6 +265,16 @@ func main() {
 	// Handle --version flag
 	if versionFlag {
 		fmt.Printf("sailinit %s\n", version)
+		os.Exit(0)
+	}
+
+	// Handle --upgrade flag. Runs before any project or Docker checks so it
+	// works from any directory.
+	if upgradeFlag {
+		if err := runUpgrade(dryRunFlag, yesFlag); err != nil {
+			printError(fmt.Sprintf("Upgrade failed: %v", err))
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
