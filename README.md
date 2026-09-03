@@ -67,6 +67,8 @@ sailinit [flags] [php_version]
 | `--reset-db` | | Reset database settings to Sail defaults (mysql, laravel, sail/password) |
 | `--new <name>`| `-n <name>` | Create a new Laravel project and set it up with Sail |
 | `--with <svcs>`| `-w <svcs>` | Services to include for new project (default: `mysql`, e.g. `mysql,redis,mailpit`) |
+| `--json` | `-j` | Output registered projects in structured JSON format |
+| `--port` | `-p` | Print calculated `APP_PORT` for current project and exit |
 | `--yes` | `-y` | Automatic yes to prompts; assume non-interactive mode |
 | `--dry-run` | `-d` | Show what would happen without making changes |
 | `--completion <shell>` | | Generate shell completion script (`bash`, `zsh`, `fish`) |
@@ -89,6 +91,12 @@ sailinit -n my-app -w mysql,redis,mailpit
 
 # Run headlessly / non-interactively
 sailinit -y
+
+# Print just the assigned APP_PORT for current directory (useful in scripts)
+sailinit -p
+
+# Export all registered projects as JSON
+sailinit -l -j
 
 # Auto-detects PHP version (run inside an existing project)
 sailinit
@@ -122,6 +130,37 @@ sailinit -d
 
 # Generate zsh completion script
 eval "$(sailinit --completion zsh)"
+```
+
+### Safety Checks
+
+Before running setup in the current directory, `sailinit` checks for the presence of `composer.json` or `artisan`. If neither file is found, it warns you:
+```
+Warning: No Laravel project files (composer.json or artisan) detected in current directory.
+Continue anyway? [y/N]:
+```
+In non-interactive mode (`-y`), setup continues automatically.
+
+### Custom Base Port Offsets
+
+By default, ports are calculated using default base offsets (`APP_PORT = 8000 + suffix`, etc.). You can customize the base ports globally by creating `~/.config/sailinit/config.json`:
+
+```json
+{
+  "base_app_port": 8000,
+  "base_db_port": 3300,
+  "base_redis_port": 6300,
+  "base_meilisearch_port": 7700,
+  "base_mailpit_dashboard_port": 18100,
+  "base_mailpit_port": 1000,
+  "base_vite_port": 5100
+}
+```
+
+Or override individual base ports using environment variables:
+```bash
+export SAILINIT_BASE_APP_PORT=9000
+export SAILINIT_BASE_DB_PORT=4300
 ```
 
 ### Project List Output

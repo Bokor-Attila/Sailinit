@@ -665,3 +665,17 @@ func TestPortStatePathBackwardsCompatibility(t *testing.T) {
 		}
 	}
 }
+
+func TestGlobalConfigOverrides(t *testing.T) {
+	t.Setenv("SAILINIT_BASE_APP_PORT", "9500")
+
+	cfg := loadGlobalConfig()
+	if cfg.BaseAppPort != 9500 {
+		t.Errorf("Expected BaseAppPort 9500 from env override, got %d", cfg.BaseAppPort)
+	}
+
+	ports := CalculatePorts(10)
+	if ports["APP_PORT"] != 9510 {
+		t.Errorf("Expected calculated APP_PORT 9510, got %d", ports["APP_PORT"])
+	}
+}

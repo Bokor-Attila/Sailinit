@@ -39,24 +39,162 @@ type BusyPort struct {
 	Port int
 }
 
+type GlobalConfig struct {
+	BaseAppPort              int `json:"base_app_port"`
+	BaseDbPort               int `json:"base_db_port"`
+	BaseRedisPort            int `json:"base_redis_port"`
+	BaseMeilisearchPort      int `json:"base_meilisearch_port"`
+	BaseMailpitDashboardPort int `json:"base_mailpit_dashboard_port"`
+	BaseMailpitPort          int `json:"base_mailpit_port"`
+	BaseVitePort             int `json:"base_vite_port"`
+	BaseMinioPort            int `json:"base_minio_port"`
+	BaseMinioConsolePort     int `json:"base_minio_console_port"`
+	BaseTypesensePort        int `json:"base_typesense_port"`
+	BaseSoketiPort           int `json:"base_soketi_port"`
+	BaseSeleniumPort         int `json:"base_selenium_port"`
+}
+
+func DefaultGlobalConfig() GlobalConfig {
+	return GlobalConfig{
+		BaseAppPort:              8000,
+		BaseDbPort:               3300,
+		BaseRedisPort:            6300,
+		BaseMeilisearchPort:      7700,
+		BaseMailpitDashboardPort: 18100,
+		BaseMailpitPort:          1000,
+		BaseVitePort:             5100,
+		BaseMinioPort:            9000,
+		BaseMinioConsolePort:     8900,
+		BaseTypesensePort:        8108,
+		BaseSoketiPort:           6001,
+		BaseSeleniumPort:         4444,
+	}
+}
+
+func getGlobalConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	legacy := filepath.Join(home, ".sailinit-config.json")
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy
+	}
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		configDir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(configDir, "sailinit", "config.json")
+}
+
+func loadGlobalConfig() GlobalConfig {
+	cfg := DefaultGlobalConfig()
+	path := getGlobalConfigPath()
+	if path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			var loaded GlobalConfig
+			if err := json.Unmarshal(data, &loaded); err == nil {
+				if loaded.BaseAppPort > 0 {
+					cfg.BaseAppPort = loaded.BaseAppPort
+				}
+				if loaded.BaseDbPort > 0 {
+					cfg.BaseDbPort = loaded.BaseDbPort
+				}
+				if loaded.BaseRedisPort > 0 {
+					cfg.BaseRedisPort = loaded.BaseRedisPort
+				}
+				if loaded.BaseMeilisearchPort > 0 {
+					cfg.BaseMeilisearchPort = loaded.BaseMeilisearchPort
+				}
+				if loaded.BaseMailpitDashboardPort > 0 {
+					cfg.BaseMailpitDashboardPort = loaded.BaseMailpitDashboardPort
+				}
+				if loaded.BaseMailpitPort > 0 {
+					cfg.BaseMailpitPort = loaded.BaseMailpitPort
+				}
+				if loaded.BaseVitePort > 0 {
+					cfg.BaseVitePort = loaded.BaseVitePort
+				}
+				if loaded.BaseMinioPort > 0 {
+					cfg.BaseMinioPort = loaded.BaseMinioPort
+				}
+				if loaded.BaseMinioConsolePort > 0 {
+					cfg.BaseMinioConsolePort = loaded.BaseMinioConsolePort
+				}
+				if loaded.BaseTypesensePort > 0 {
+					cfg.BaseTypesensePort = loaded.BaseTypesensePort
+				}
+				if loaded.BaseSoketiPort > 0 {
+					cfg.BaseSoketiPort = loaded.BaseSoketiPort
+				}
+				if loaded.BaseSeleniumPort > 0 {
+					cfg.BaseSeleniumPort = loaded.BaseSeleniumPort
+				}
+			}
+		}
+	}
+
+	parseEnv := func(envKey string, target *int) {
+		if val := os.Getenv(envKey); val != "" {
+			var p int
+			if _, err := fmt.Sscanf(val, "%d", &p); err == nil && p > 0 {
+				*target = p
+			}
+		}
+	}
+	parseEnv("SAILINIT_BASE_APP_PORT", &cfg.BaseAppPort)
+	parseEnv("SAILINIT_BASE_DB_PORT", &cfg.BaseDbPort)
+	parseEnv("SAILINIT_BASE_REDIS_PORT", &cfg.BaseRedisPort)
+	parseEnv("SAILINIT_BASE_MEILISEARCH_PORT", &cfg.BaseMeilisearchPort)
+	parseEnv("SAILINIT_BASE_MAILPIT_DASHBOARD_PORT", &cfg.BaseMailpitDashboardPort)
+	parseEnv("SAILINIT_BASE_MAILPIT_PORT", &cfg.BaseMailpitPort)
+	parseEnv("SAILINIT_BASE_VITE_PORT", &cfg.BaseVitePort)
+	parseEnv("SAILINIT_BASE_MINIO_PORT", &cfg.BaseMinioPort)
+	parseEnv("SAILINIT_BASE_MINIO_CONSOLE_PORT", &cfg.BaseMinioConsolePort)
+	parseEnv("SAILINIT_BASE_TYPESENSE_PORT", &cfg.BaseTypesensePort)
+	parseEnv("SAILINIT_BASE_SOKETI_PORT", &cfg.BaseSoketiPort)
+	parseEnv("SAILINIT_BASE_SELENIUM_PORT", &cfg.BaseSeleniumPort)
+
+	return cfg
+}
+
+func CalculatePorts(suffix int) map[string]int {
+	cfg := loadGlobalConfig()
+	return map[string]int{
+		"APP_PORT":                       cfg.BaseAppPort + suffix,
+		"FORWARD_DB_PORT":                cfg.BaseDbPort + suffix,
+		"FORWARD_REDIS_PORT":             cfg.BaseRedisPort + suffix,
+		"FORWARD_MEILISEARCH_PORT":       cfg.BaseMeilisearchPort + suffix,
+		"FORWARD_MAILPIT_DASHBOARD_PORT": cfg.BaseMailpitDashboardPort + suffix,
+		"FORWARD_MAILPIT_PORT":           cfg.BaseMailpitPort + suffix,
+		"VITE_PORT":                      cfg.BaseVitePort + suffix,
+		"FORWARD_MINIO_PORT":             cfg.BaseMinioPort + suffix,
+		"FORWARD_MINIO_CONSOLE_PORT":     cfg.BaseMinioConsolePort + suffix,
+		"FORWARD_TYPESENSE_PORT":         cfg.BaseTypesensePort + suffix,
+		"FORWARD_SOKETI_PORT":            cfg.BaseSoketiPort + suffix,
+		"FORWARD_SELENIUM_PORT":          cfg.BaseSeleniumPort + suffix,
+	}
+}
+
 // CheckSuffixPortsAvailable checks ports for a suffix and returns busy ones.
 func CheckSuffixPortsAvailable(suffix int) []BusyPort {
+	calculated := CalculatePorts(suffix)
 	ports := []struct {
 		name string
 		port int
 	}{
-		{"APP_PORT", 8000 + suffix},
-		{"FORWARD_DB_PORT", 3300 + suffix},
-		{"FORWARD_REDIS_PORT", 6300 + suffix},
-		{"FORWARD_MEILISEARCH_PORT", 7700 + suffix},
-		{"FORWARD_MAILPIT_DASHBOARD_PORT", 18100 + suffix},
-		{"FORWARD_MAILPIT_PORT", 1000 + suffix},
-		{"VITE_PORT", 5100 + suffix},
-		{"FORWARD_MINIO_PORT", 9000 + suffix},
-		{"FORWARD_MINIO_CONSOLE_PORT", 8900 + suffix},
-		{"FORWARD_TYPESENSE_PORT", 8108 + suffix},
-		{"FORWARD_SOKETI_PORT", 6001 + suffix},
-		{"FORWARD_SELENIUM_PORT", 4444 + suffix},
+		{"APP_PORT", calculated["APP_PORT"]},
+		{"FORWARD_DB_PORT", calculated["FORWARD_DB_PORT"]},
+		{"FORWARD_REDIS_PORT", calculated["FORWARD_REDIS_PORT"]},
+		{"FORWARD_MEILISEARCH_PORT", calculated["FORWARD_MEILISEARCH_PORT"]},
+		{"FORWARD_MAILPIT_DASHBOARD_PORT", calculated["FORWARD_MAILPIT_DASHBOARD_PORT"]},
+		{"FORWARD_MAILPIT_PORT", calculated["FORWARD_MAILPIT_PORT"]},
+		{"VITE_PORT", calculated["VITE_PORT"]},
+		{"FORWARD_MINIO_PORT", calculated["FORWARD_MINIO_PORT"]},
+		{"FORWARD_MINIO_CONSOLE_PORT", calculated["FORWARD_MINIO_CONSOLE_PORT"]},
+		{"FORWARD_TYPESENSE_PORT", calculated["FORWARD_TYPESENSE_PORT"]},
+		{"FORWARD_SOKETI_PORT", calculated["FORWARD_SOKETI_PORT"]},
+		{"FORWARD_SELENIUM_PORT", calculated["FORWARD_SELENIUM_PORT"]},
 	}
 
 	var busy []BusyPort

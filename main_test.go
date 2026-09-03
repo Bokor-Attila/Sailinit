@@ -278,3 +278,40 @@ func TestGenerateCompletion(t *testing.T) {
 		generateCompletion(s)
 	}
 }
+
+func TestCheckLaravelProject(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "check-laravel-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Non-Laravel directory with yesFlag=true should not exit or error
+	checkLaravelProject(tempDir, true)
+
+	// Create composer.json to simulate a Laravel project
+	if err := os.WriteFile(filepath.Join(tempDir, "composer.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	checkLaravelProject(tempDir, false)
+}
+
+func TestHandleListJSON(t *testing.T) {
+	tempDir, cleanup := setupTestState(t)
+	defer cleanup()
+
+	// Register a project
+	projDir := filepath.Join(tempDir, "my-app")
+	if err := os.MkdirAll(projDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveProjectSuffix(projDir, 50); err != nil {
+		t.Fatal(err)
+	}
+
+	mockCleanup, _ := setupMockRunners(t)
+	defer mockCleanup()
+
+	// Output in JSON format
+	handleList(true)
+}

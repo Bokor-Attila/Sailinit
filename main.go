@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -93,6 +94,25 @@ func detectPHPVersion(projectDir string) string {
 	return ""
 }
 
+func checkLaravelProject(projectDir string, yesFlag bool) {
+	composerPath := filepath.Join(projectDir, "composer.json")
+	artisanPath := filepath.Join(projectDir, "artisan")
+	_, errComposer := os.Stat(composerPath)
+	_, errArtisan := os.Stat(artisanPath)
+
+	if os.IsNotExist(errComposer) && os.IsNotExist(errArtisan) {
+		printWarning("Warning: No Laravel project files (composer.json or artisan) detected in current directory.")
+		if !yesFlag {
+			fmt.Print("Continue anyway? [y/N]: ")
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(confirm) != "y" {
+				os.Exit(0)
+			}
+		}
+	}
+}
+
 func generateCompletion(shell string) {
 	switch strings.ToLower(shell) {
 	case "bash":
@@ -102,7 +122,7 @@ _sailinit() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --completion"
+    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --json -j --port -p --completion"
 
     if [[ ${cur} == -* ]] ; then
         COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
@@ -131,6 +151,8 @@ _sailinit() {
         '(-y --yes --non-interactive)'{-y,--yes,--non-interactive}'[Non-interactive mode; auto-confirm prompts]'
         '(-n --new)'{-n,--new}'[Create new Laravel project]:project name:'
         '(-w --with)'{-w,--with}'[Services to include for new project]:services:'
+        '(-j --json)'{-j,--json}'[Output in JSON format]'
+        '(-p --port)'{-p,--port}'[Print APP_PORT for current project]'
         '--completion[Generate shell completion script]:shell:(bash zsh fish)'
     )
     _describe -t commands 'sailinit flags' options
@@ -153,6 +175,8 @@ complete -c sailinit -s d -l dry-run -d 'Show what would happen without making c
 complete -c sailinit -s y -l yes -l non-interactive -d 'Automatic yes to prompts'
 complete -c sailinit -s n -l new -r -d 'Create a new Laravel project'
 complete -c sailinit -s w -l with -r -d 'Services to include (default: mysql)'
+complete -c sailinit -s j -l json -d 'Output in JSON format'
+complete -c sailinit -s p -l port -d 'Print APP_PORT for current project'
 complete -c sailinit -l completion -r -f -a 'bash zsh fish' -d 'Generate shell completion script'
 `)
 	default:
@@ -174,6 +198,8 @@ func main() {
 		resetDbFlag    bool
 		dryRunFlag     bool
 		yesFlag        bool
+		jsonFlag       bool
+		portFlag       bool
 		newFlag        string
 		withFlag       string
 		completionFlag string
@@ -208,6 +234,12 @@ func main() {
 	flag.BoolVar(&yesFlag, "y", false, "Automatic yes to prompts (shorthand)")
 	flag.BoolVar(&yesFlag, "non-interactive", false, "Non-interactive mode")
 
+	flag.BoolVar(&jsonFlag, "json", false, "Output project details in JSON format")
+	flag.BoolVar(&jsonFlag, "j", false, "Output project details in JSON format (shorthand)")
+
+	flag.BoolVar(&portFlag, "port", false, "Print calculated APP_PORT for current project and exit")
+	flag.BoolVar(&portFlag, "p", false, "Print calculated APP_PORT for current project and exit (shorthand)")
+
 	flag.StringVar(&newFlag, "new", "", "Create a new Laravel project with the given name")
 	flag.StringVar(&newFlag, "n", "", "Create a new Laravel project with the given name (shorthand)")
 
@@ -230,9 +262,26 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Handle --list flag
-	if listFlag {
-		handleList()
+	// Handle --port flag
+	if portFlag {
+		projectDir, err := os.Getwd()
+		if err != nil {
+			printError(fmt.Sprintf("Error getting current directory: %v", err))
+			os.Exit(1)
+		}
+		suggested, _, _, err := getSuggestedSuffix(projectDir)
+		if err != nil {
+			printError(fmt.Sprintf("Error determining port: %v", err))
+			os.Exit(1)
+		}
+		ports := CalculatePorts(suggested)
+		fmt.Println(ports["APP_PORT"])
+		os.Exit(0)
+	}
+
+	// Handle --list or standalone --json flag
+	if listFlag || jsonFlag {
+		handleList(jsonFlag)
 		os.Exit(0)
 	}
 
@@ -348,6 +397,8 @@ func main() {
 		printError(fmt.Sprintf("Error getting current directory: %v", err))
 		os.Exit(1)
 	}
+
+	checkLaravelProject(projectDir, yesFlag)
 
 	detectedVersion := detectPHPVersion(projectDir)
 	phpVersion := "84" // Default
@@ -523,21 +574,50 @@ func main() {
 	printInfo(fmt.Sprintf("Mailpit Dashboard: http://localhost:%d", 18100+suffix))
 }
 
-func handleList() {
+func handleList(jsonFormat bool) {
 	projects, err := ListProjects()
 	if err != nil {
 		printError(fmt.Sprintf("Error listing projects: %v", err))
 		os.Exit(1)
 	}
+
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].Suffix < projects[j].Suffix
+	})
+
+	if jsonFormat {
+		type ProjectJSON struct {
+			Path       string         `json:"path"`
+			Suffix     int            `json:"suffix"`
+			Exists     bool           `json:"exists"`
+			Ports      map[string]int `json:"ports"`
+			Containers string         `json:"containers,omitempty"`
+		}
+
+		var out []ProjectJSON
+		for _, p := range projects {
+			containers := "missing"
+			if p.Exists {
+				containers = getContainerStatus(p.Path)
+			}
+			out = append(out, ProjectJSON{
+				Path:       p.Path,
+				Suffix:     p.Suffix,
+				Exists:     p.Exists,
+				Ports:      CalculatePorts(p.Suffix),
+				Containers: containers,
+			})
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		encoder.Encode(out)
+		return
+	}
+
 	if len(projects) == 0 {
 		printInfo("No registered projects found.")
 		return
 	}
-
-	// Sort by suffix for consistent output
-	sort.Slice(projects, func(i, j int) bool {
-		return projects[i].Suffix < projects[j].Suffix
-	})
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -554,13 +634,14 @@ func handleList() {
 		if !p.Exists {
 			status = colorize(colorRed, "[X] Missing")
 		}
+		ports := CalculatePorts(p.Suffix)
 		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%s\n",
 			p.Path,
 			p.Suffix,
-			8000+p.Suffix,
-			3300+p.Suffix,
-			6300+p.Suffix,
-			5100+p.Suffix,
+			ports["APP_PORT"],
+			ports["FORWARD_DB_PORT"],
+			ports["FORWARD_REDIS_PORT"],
+			ports["VITE_PORT"],
 			status,
 		)
 	}
@@ -666,19 +747,20 @@ func setupEnv(projectDir string, suffix int, resetDb bool) error {
 		"FORWARD_SELENIUM_PORT",
 	}
 
+	calculatedPorts := CalculatePorts(suffix)
 	portValues := map[string]string{
-		"APP_PORT":                       fmt.Sprintf("%d", 8000+suffix),
-		"FORWARD_DB_PORT":                fmt.Sprintf("%d", 3300+suffix),
-		"FORWARD_REDIS_PORT":             fmt.Sprintf("%d", 6300+suffix),
-		"FORWARD_MEILISEARCH_PORT":       fmt.Sprintf("%d", 7700+suffix),
-		"FORWARD_MAILPIT_DASHBOARD_PORT": fmt.Sprintf("%d", 18100+suffix),
-		"FORWARD_MAILPIT_PORT":           fmt.Sprintf("%d", 1000+suffix),
-		"VITE_PORT":                      fmt.Sprintf("%d", 5100+suffix),
-		"FORWARD_MINIO_PORT":             fmt.Sprintf("%d", 9000+suffix),
-		"FORWARD_MINIO_CONSOLE_PORT":     fmt.Sprintf("%d", 8900+suffix),
-		"FORWARD_TYPESENSE_PORT":         fmt.Sprintf("%d", 8108+suffix),
-		"FORWARD_SOKETI_PORT":            fmt.Sprintf("%d", 6001+suffix),
-		"FORWARD_SELENIUM_PORT":          fmt.Sprintf("%d", 4444+suffix),
+		"APP_PORT":                       fmt.Sprintf("%d", calculatedPorts["APP_PORT"]),
+		"FORWARD_DB_PORT":                fmt.Sprintf("%d", calculatedPorts["FORWARD_DB_PORT"]),
+		"FORWARD_REDIS_PORT":             fmt.Sprintf("%d", calculatedPorts["FORWARD_REDIS_PORT"]),
+		"FORWARD_MEILISEARCH_PORT":       fmt.Sprintf("%d", calculatedPorts["FORWARD_MEILISEARCH_PORT"]),
+		"FORWARD_MAILPIT_DASHBOARD_PORT": fmt.Sprintf("%d", calculatedPorts["FORWARD_MAILPIT_DASHBOARD_PORT"]),
+		"FORWARD_MAILPIT_PORT":           fmt.Sprintf("%d", calculatedPorts["FORWARD_MAILPIT_PORT"]),
+		"VITE_PORT":                      fmt.Sprintf("%d", calculatedPorts["VITE_PORT"]),
+		"FORWARD_MINIO_PORT":             fmt.Sprintf("%d", calculatedPorts["FORWARD_MINIO_PORT"]),
+		"FORWARD_MINIO_CONSOLE_PORT":     fmt.Sprintf("%d", calculatedPorts["FORWARD_MINIO_CONSOLE_PORT"]),
+		"FORWARD_TYPESENSE_PORT":         fmt.Sprintf("%d", calculatedPorts["FORWARD_TYPESENSE_PORT"]),
+		"FORWARD_SOKETI_PORT":            fmt.Sprintf("%d", calculatedPorts["FORWARD_SOKETI_PORT"]),
+		"FORWARD_SELENIUM_PORT":          fmt.Sprintf("%d", calculatedPorts["FORWARD_SELENIUM_PORT"]),
 	}
 
 	var newLines []string
@@ -852,10 +934,11 @@ func showProjectStatus() error {
 		if p.Exists {
 			containers = getContainerStatus(p.Path)
 		}
+		ports := CalculatePorts(p.Suffix)
 		fmt.Fprintf(w, "%s\t%d\t%d\t%s\n",
 			p.Path,
 			p.Suffix,
-			8000+p.Suffix,
+			ports["APP_PORT"],
 			containers,
 		)
 	}
