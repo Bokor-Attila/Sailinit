@@ -16,6 +16,7 @@ A Go-based tool to automate the initialization of Laravel Sail projects with int
 - **Colored Output**: ANSI-colored terminal output with `NO_COLOR` support.
 - **Dry-Run Mode**: Preview what would happen without making any changes.
 - **Sail Lifecycle**: Stop, bring down, and check status of Sail containers.
+- **Self-Update**: Upgrade to the latest release in place with `--upgrade`, with checksum verification.
 
 ## Installation
 
@@ -32,9 +33,12 @@ A Go-based tool to automate the initialization of Laravel Sail projects with int
 
 ### From Binary (GitHub Release)
 Download the `sailinit` binary from your GitHub project's **Releases** page. Binaries are automatically built for:
-- Linux (`sailinit-linux-amd64`)
+- Linux x86_64 (`sailinit-linux-amd64`)
+- Linux ARM64 (`sailinit-linux-arm64`)
 - macOS Intel (`sailinit-macos-amd64`)
 - macOS Apple Silicon (`sailinit-macos-arm64`)
+
+Each release also publishes `sha256sums.txt` for verification.
 
 After downloading, move it to your path:
 ```bash
@@ -43,6 +47,9 @@ chmod +x sailinit-macos-arm64
 xattr -d com.apple.quarantine sailinit-macos-arm64
 sudo mv sailinit-macos-arm64 /usr/local/bin/sailinit
 ```
+
+The `xattr` step is only needed for this first manual install. Later upgrades via
+`sailinit --upgrade` download the binary directly and are never quarantined.
 
 ## Usage
 
@@ -71,6 +78,7 @@ sailinit [flags] [php_version]
 | `--port` | `-p` | Print calculated `APP_PORT` for current project and exit |
 | `--yes` | `-y` | Automatic yes to prompts; assume non-interactive mode |
 | `--dry-run` | `-d` | Show what would happen without making changes |
+| `--upgrade` | `-u` | Download and install the latest release over the running binary |
 | `--completion <shell>` | | Generate shell completion script (`bash`, `zsh`, `fish`) |
 
 ### Arguments
@@ -128,6 +136,12 @@ sailinit -f
 # Preview what would happen without making any changes
 sailinit -d
 
+# Upgrade to the latest release
+sailinit -u
+
+# Check for a newer release without installing it
+sailinit -u -d
+
 # Generate zsh completion script
 eval "$(sailinit --completion zsh)"
 ```
@@ -140,6 +154,38 @@ Warning: No Laravel project files (composer.json or artisan) detected in current
 Continue anyway? [y/N]:
 ```
 In non-interactive mode (`-y`), setup continues automatically.
+
+### Upgrading
+
+```bash
+sailinit --upgrade
+```
+
+This checks the latest GitHub release, and if it is newer than the running
+binary it downloads the asset for your platform, verifies its SHA-256 against
+the release's `sha256sums.txt`, runs it once to confirm it works on your
+machine, then atomically swaps it into place. The previous binary is kept aside
+until the swap succeeds and restored if anything fails.
+
+Pair it with `--dry-run` to check for a new version without installing:
+
+```bash
+sailinit --upgrade --dry-run
+```
+
+The download is aborted if the release does not publish `sha256sums.txt`, or if
+it lists no entry for your platform's binary.
+
+Notes:
+- `--upgrade` was introduced in v1.5.0. On v1.4.0 or earlier, upgrade manually
+  once using the instructions above; `--upgrade` works from then on.
+- Upgrading needs write access to the directory holding the binary. If it is
+  root-owned (common for `/usr/local/bin` on Linux), re-run with `sudo`.
+- Development builds (`sailinit --version` prints `dev`) refuse to self-update,
+  since that would replace your local build with a release. Pass `--yes` to
+  override.
+- Symlinked installs are resolved first, so the real binary is replaced rather
+  than the symlink.
 
 ### Custom Base Port Offsets
 

@@ -49,16 +49,25 @@ jobs:
           LDFLAGS="-X main.version=${VERSION}"
           mkdir -p bin
           GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o bin/sailinit-linux-amd64 .
+          GOOS=linux GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o bin/sailinit-linux-arm64 .
           GOOS=darwin GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o bin/sailinit-macos-amd64 .
           GOOS=darwin GOARCH=arm64 go build -ldflags "${LDFLAGS}" -o bin/sailinit-macos-arm64 .
+
+      - name: Generate Checksums
+        run: |
+          cd bin
+          sha256sum sailinit-* > sha256sums.txt
+          cat sha256sums.txt
           
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             bin/sailinit-linux-amd64
+            bin/sailinit-linux-arm64
             bin/sailinit-macos-amd64
             bin/sailinit-macos-arm64
+            bin/sha256sums.txt
           draft: false
           prerelease: false
           generate_release_notes: true
