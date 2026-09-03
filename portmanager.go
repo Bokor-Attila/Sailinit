@@ -39,7 +39,7 @@ type BusyPort struct {
 	Port int
 }
 
-// CheckSuffixPortsAvailable checks all 7 ports for a suffix and returns busy ones.
+// CheckSuffixPortsAvailable checks ports for a suffix and returns busy ones.
 func CheckSuffixPortsAvailable(suffix int) []BusyPort {
 	ports := []struct {
 		name string
@@ -52,6 +52,11 @@ func CheckSuffixPortsAvailable(suffix int) []BusyPort {
 		{"FORWARD_MAILPIT_DASHBOARD_PORT", 18100 + suffix},
 		{"FORWARD_MAILPIT_PORT", 1000 + suffix},
 		{"VITE_PORT", 5100 + suffix},
+		{"FORWARD_MINIO_PORT", 9000 + suffix},
+		{"FORWARD_MINIO_CONSOLE_PORT", 8900 + suffix},
+		{"FORWARD_TYPESENSE_PORT", 8108 + suffix},
+		{"FORWARD_SOKETI_PORT", 6001 + suffix},
+		{"FORWARD_SELENIUM_PORT", 4444 + suffix},
 	}
 
 	var busy []BusyPort
@@ -105,7 +110,23 @@ func getPortStatePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".laravel-sail-ports.json"), nil
+
+	// 1. Backward compatibility: if legacy state file exists in home, keep using it!
+	legacyPath := filepath.Join(home, ".laravel-sail-ports.json")
+	if _, err := os.Stat(legacyPath); err == nil {
+		return legacyPath, nil
+	}
+
+	// 2. Modern XDG Config directory for new installations
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		configDir = filepath.Join(home, ".config")
+	}
+	targetDir := filepath.Join(configDir, "sailinit")
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return legacyPath, nil
+	}
+	return filepath.Join(targetDir, "ports.json"), nil
 }
 
 func loadPortState() (*PortState, bool, error) {
@@ -145,7 +166,28 @@ func (s *PortState) save() error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0644)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+
+	tmpFile, err := os.CreateTemp(dir, "ports-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmpFile.Name()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+
+	return os.Rename(tmpName, path)
 }
 
 func getSuggestedSuffix(projectDir string) (int, bool, bool, error) {

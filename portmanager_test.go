@@ -62,6 +62,12 @@ func TestSetupEnvFormatting(t *testing.T) {
 	if !strings.Contains(content, "FORWARD_DB_PORT=3355") {
 		t.Error("FORWARD_DB_PORT=3355 missing")
 	}
+	if !strings.Contains(content, "FORWARD_MINIO_PORT=9055") {
+		t.Error("FORWARD_MINIO_PORT=9055 missing")
+	}
+	if !strings.Contains(content, "FORWARD_TYPESENSE_PORT=8163") {
+		t.Error("FORWARD_TYPESENSE_PORT=8163 missing")
+	}
 	if !strings.Contains(content, "SAIL_XDEBUG_MODE=develop,debug,coverage") {
 		t.Error("SAIL_XDEBUG_MODE missing")
 	}
@@ -628,6 +634,34 @@ func TestCheckSuffixPortsAvailable(t *testing.T) {
 			if !found {
 				t.Errorf("Expected port %d to be reported as busy", port)
 			}
+		}
+	}
+}
+
+func TestPortStatePathBackwardsCompatibility(t *testing.T) {
+	origOverride := testStatePathOverride
+	testStatePathOverride = ""
+	defer func() { testStatePathOverride = origOverride }()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	legacyPath := filepath.Join(home, ".laravel-sail-ports.json")
+
+	path, err := getPortStatePath()
+	if err != nil {
+		t.Fatalf("getPortStatePath failed: %v", err)
+	}
+
+	if _, err := os.Stat(legacyPath); err == nil {
+		if path != legacyPath {
+			t.Errorf("Expected path to be legacy path %s, got %s", legacyPath, path)
+		}
+	} else {
+		if !strings.Contains(path, "ports.json") {
+			t.Errorf("Expected path to contain ports.json, got %s", path)
 		}
 	}
 }
