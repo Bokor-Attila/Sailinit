@@ -122,7 +122,7 @@ _sailinit() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --json -j --port -p --upgrade -u --completion"
+    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --json -j --port -p --upgrade -u --open -o --doctor --completion"
 
     if [[ ${cur} == -* ]] ; then
         COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
@@ -154,6 +154,8 @@ _sailinit() {
         '(-j --json)'{-j,--json}'[Output in JSON format]'
         '(-p --port)'{-p,--port}'[Print APP_PORT for current project]'
         '(-u --upgrade)'{-u,--upgrade}'[Download and install the latest release]'
+        '(-o --open)'{-o,--open}'[Open the current project URL in the browser]'
+        '--doctor[Run diagnostics on the registry and current project]'
         '--completion[Generate shell completion script]:shell:(bash zsh fish)'
     )
     _describe -t commands 'sailinit flags' options
@@ -179,6 +181,8 @@ complete -c sailinit -s w -l with -r -d 'Services to include (default: mysql)'
 complete -c sailinit -s j -l json -d 'Output in JSON format'
 complete -c sailinit -s p -l port -d 'Print APP_PORT for current project'
 complete -c sailinit -s u -l upgrade -d 'Download and install the latest release'
+complete -c sailinit -s o -l open -d 'Open the current project URL in the browser'
+complete -c sailinit -l doctor -d 'Run diagnostics on the registry and current project'
 complete -c sailinit -l completion -r -f -a 'bash zsh fish' -d 'Generate shell completion script'
 `)
 	default:
@@ -203,6 +207,8 @@ func main() {
 		jsonFlag       bool
 		portFlag       bool
 		upgradeFlag    bool
+		openFlag       bool
+		doctorFlag     bool
 		newFlag        string
 		withFlag       string
 		completionFlag string
@@ -254,6 +260,11 @@ func main() {
 	flag.BoolVar(&upgradeFlag, "upgrade", false, "Download and install the latest release over the running binary")
 	flag.BoolVar(&upgradeFlag, "u", false, "Download and install the latest release (shorthand)")
 
+	flag.BoolVar(&openFlag, "open", false, "Open the current project's URL in the default browser")
+	flag.BoolVar(&openFlag, "o", false, "Open the current project's URL in the default browser (shorthand)")
+
+	flag.BoolVar(&doctorFlag, "doctor", false, "Run diagnostics on the port registry and the current project")
+
 	flag.Parse()
 
 	// Handle --completion flag
@@ -292,6 +303,34 @@ func main() {
 		}
 		ports := CalculatePorts(suggested)
 		fmt.Println(ports["APP_PORT"])
+		os.Exit(0)
+	}
+
+	// Handle --doctor flag. Read-only: it reports problems and their fixes but
+	// never repairs anything. Exits 1 when a check fails so it can gate a script.
+	if doctorFlag {
+		projectDir, err := os.Getwd()
+		if err != nil {
+			printError(fmt.Sprintf("Error getting current directory: %v", err))
+			os.Exit(1)
+		}
+		if !runDoctor(projectDir, jsonFlag) {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
+	// Handle --open flag
+	if openFlag {
+		projectDir, err := os.Getwd()
+		if err != nil {
+			printError(fmt.Sprintf("Error getting current directory: %v", err))
+			os.Exit(1)
+		}
+		if err := runOpen(projectDir, dryRunFlag); err != nil {
+			printError(fmt.Sprintf("Error opening project: %v", err))
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
