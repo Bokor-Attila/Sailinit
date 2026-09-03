@@ -17,6 +17,8 @@ A Go-based tool to automate the initialization of Laravel Sail projects with int
 - **Dry-Run Mode**: Preview what would happen without making any changes.
 - **Sail Lifecycle**: Stop, bring down, and check status of Sail containers.
 - **Self-Update**: Upgrade to the latest release in place with `--upgrade`, with checksum verification.
+- **Diagnostics**: `--doctor` checks the registry, duplicate suffixes, `.env` drift, and port availability.
+- **Quick Open**: `--open` launches the current project's URL in your browser.
 
 ## Installation
 
@@ -78,6 +80,8 @@ sailinit [flags] [php_version]
 | `--port` | `-p` | Print calculated `APP_PORT` for current project and exit |
 | `--yes` | `-y` | Automatic yes to prompts; assume non-interactive mode |
 | `--dry-run` | `-d` | Show what would happen without making changes |
+| `--open` | `-o` | Open the current project's URL in the default browser |
+| `--doctor` | | Run diagnostics on the port registry and the current project |
 | `--upgrade` | `-u` | Download and install the latest release over the running binary |
 | `--completion <shell>` | | Generate shell completion script (`bash`, `zsh`, `fish`) |
 
@@ -136,6 +140,15 @@ sailinit -f
 # Preview what would happen without making any changes
 sailinit -d
 
+# Open the current project in your browser
+sailinit -o
+
+# Diagnose registry and project problems
+sailinit --doctor
+
+# Machine-readable diagnostics
+sailinit --doctor -j
+
 # Upgrade to the latest release
 sailinit -u
 
@@ -154,6 +167,59 @@ Warning: No Laravel project files (composer.json or artisan) detected in current
 Continue anyway? [y/N]:
 ```
 In non-interactive mode (`-y`), setup continues automatically.
+
+### Diagnostics
+
+```bash
+sailinit --doctor
+```
+
+Runs a read-only health check and prints each result with a suggested fix. It
+never changes anything itself.
+
+```
+sailinit doctor
+[ OK ] Docker: daemon is running
+[ OK ] Registry: 3 project(s) tracked in /Users/you/.config/sailinit/ports.json
+[FAIL] Duplicate suffixes: suffix 51: /Users/you/blog, /Users/you/shop
+       fix: run sailinit --remove in one project, then sailinit to reassign it
+[WARN] Orphaned projects: 1 registered director(ies) no longer exist: /Users/you/old
+       fix: run sailinit --clean
+[ OK ] Current project: registered with suffix 52 (APP_PORT 8052)
+[ OK ] .env ports: .env matches the registry (APP_PORT 8052)
+[ OK ] Port availability: all forwarded ports are free
+```
+
+What it checks:
+
+| Check | Severity | Meaning |
+|---|---|---|
+| Docker daemon | WARN | Docker Desktop or the Docker service is not reachable |
+| Registry readable | FAIL | The state file is corrupt or unreadable |
+| Registry max suffix | FAIL | `max_suffix` is below an allocated suffix, so the next project would collide |
+| Duplicate suffixes | FAIL | Two projects share a suffix, and therefore every forwarded port |
+| Orphaned projects | WARN | A registered directory no longer exists |
+| Current project | WARN | This Laravel project is not registered yet |
+| `.env` ports | FAIL | `.env` and the registry disagree about `APP_PORT` |
+| Port availability | WARN | Something already holds one of this project's ports |
+
+**Exit code** is `1` if any check FAILs and `0` otherwise, so `--doctor` works as
+a CI or pre-flight gate. WARN does not affect the exit code. Add `-j` for JSON.
+
+Checks that depend on the current directory are skipped when you are not inside
+a Laravel project, so `--doctor` is safe to run anywhere.
+
+### Opening a Project
+
+```bash
+sailinit --open
+```
+
+Opens `http://localhost:<APP_PORT>` for the current project using `open` on
+macOS or `xdg-open` on Linux. If the containers are not running it warns and
+opens the tab anyway, so the page is ready as `sail up` finishes. When no opener
+is available the URL is printed instead of failing. `--dry-run` prints the URL
+without opening it.
 
 ### Upgrading
 
@@ -311,3 +377,7 @@ Ports are calculated as:
 - **FORWARD_SELENIUM_PORT**: `4444 + suffix`
 
 This ensures that even with hundreds of projects, you won't have conflicting ports on your local machine.
+
+## License
+
+Released under the [MIT License](LICENSE). Copyright (c) 2026 Attila Bokor.
