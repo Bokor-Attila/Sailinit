@@ -594,10 +594,10 @@ func runSailInit(phpVersion, projectDir string, forceInstall bool) error {
 		return err
 	}
 
-	printInfo("Installing composer dependencies via Docker...")
+	printInfo("Installing composer dependencies via Docker (composer:latest)...")
 
 	currentUser := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
-	dockerImage := fmt.Sprintf("laravelsail/php%s-composer:latest", phpVersion)
+	dockerImage := "composer:latest"
 
 	return execRunner("docker", "", "", "run", "--rm",
 		"-u", currentUser,
