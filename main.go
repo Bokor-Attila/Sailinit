@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -14,6 +15,50 @@ import (
 )
 
 var version = "dev"
+
+// CommandRunner executes a command and streams output.
+type CommandRunner func(name string, dir string, stdin string, args ...string) error
+
+// CommandOutputRunner executes a command and returns its standard output.
+type CommandOutputRunner func(name string, dir string, args ...string) ([]byte, error)
+
+var defaultCommandRunner CommandRunner = func(name string, dir string, stdin string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	} else {
+		cmd.Stdin = os.Stdin
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+var defaultCommandOutputRunner CommandOutputRunner = func(name string, dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command(name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	return cmd.Output()
+}
+
+var execRunner = defaultCommandRunner
+var execOutputRunner = defaultCommandOutputRunner
+
+func isDockerRunning() bool {
+	_, err := execOutputRunner("docker", "", "info")
+	return err == nil
+}
+
+func checkDockerDaemon() error {
+	if !isDockerRunning() {
+		return fmt.Errorf("Docker daemon is not running. Please start Docker Engine / Docker Desktop first.")
+	}
+	return nil
+}
 
 func detectPHPVersion(projectDir string) string {
 	files := []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
@@ -49,34 +94,199 @@ func detectPHPVersion(projectDir string) string {
 	return ""
 }
 
+func checkLaravelProject(projectDir string, yesFlag bool) {
+	composerPath := filepath.Join(projectDir, "composer.json")
+	artisanPath := filepath.Join(projectDir, "artisan")
+	_, errComposer := os.Stat(composerPath)
+	_, errArtisan := os.Stat(artisanPath)
+
+	if os.IsNotExist(errComposer) && os.IsNotExist(errArtisan) {
+		printWarning("Warning: No Laravel project files (composer.json or artisan) detected in current directory.")
+		if !yesFlag {
+			fmt.Print("Continue anyway? [y/N]: ")
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(confirm) != "y" {
+				os.Exit(0)
+			}
+		}
+	}
+}
+
+func generateCompletion(shell string) {
+	switch strings.ToLower(shell) {
+	case "bash":
+		fmt.Print(`# bash completion for sailinit
+_sailinit() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --json -j --port -p --completion"
+
+    if [[ ${cur} == -* ]] ; then
+        COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
+        return 0
+    fi
+}
+complete -F _sailinit sailinit
+`)
+	case "zsh":
+		fmt.Print(`# zsh completion for sailinit
+#compdef sailinit
+
+_sailinit() {
+    local -a options
+    options=(
+        '(-v --version)'{-v,--version}'[Print version and exit]'
+        '(-l --list)'{-l,--list}'[List all registered projects]'
+        '(-s --status)'{-s,--status}'[Show container status for registered projects]'
+        '(-c --clean)'{-c,--clean}'[Remove orphaned projects from registry]'
+        '(-r --remove)'{-r,--remove}'[Remove current project from port registry]'
+        '--stop[Run sail stop in current project]'
+        '--down[Run sail down in current project]'
+        '(-f --fresh)'{-f,--fresh}'[Force re-run composer install]'
+        '--reset-db[Reset DB settings to Sail defaults]'
+        '(-d --dry-run)'{-d,--dry-run}'[Preview changes without modifying system]'
+        '(-y --yes --non-interactive)'{-y,--yes,--non-interactive}'[Non-interactive mode; auto-confirm prompts]'
+        '(-n --new)'{-n,--new}'[Create new Laravel project]:project name:'
+        '(-w --with)'{-w,--with}'[Services to include for new project]:services:'
+        '(-j --json)'{-j,--json}'[Output in JSON format]'
+        '(-p --port)'{-p,--port}'[Print APP_PORT for current project]'
+        '--completion[Generate shell completion script]:shell:(bash zsh fish)'
+    )
+    _describe -t commands 'sailinit flags' options
+}
+
+_sailinit "$@"
+`)
+	case "fish":
+		fmt.Print(`# fish completion for sailinit
+complete -c sailinit -s v -l version -d 'Print version and exit'
+complete -c sailinit -s l -l list -d 'List all registered projects'
+complete -c sailinit -s s -l status -d 'Show status of all registered projects'
+complete -c sailinit -s c -l clean -d 'Remove entries for non-existent projects'
+complete -c sailinit -s r -l remove -d 'Remove current project from registry'
+complete -c sailinit -l stop -d 'Run sail stop in current project'
+complete -c sailinit -l down -d 'Run sail down in current project'
+complete -c sailinit -s f -l fresh -d 'Force re-run composer install'
+complete -c sailinit -l reset-db -d 'Reset DB settings to defaults'
+complete -c sailinit -s d -l dry-run -d 'Show what would happen without making changes'
+complete -c sailinit -s y -l yes -l non-interactive -d 'Automatic yes to prompts'
+complete -c sailinit -s n -l new -r -d 'Create a new Laravel project'
+complete -c sailinit -s w -l with -r -d 'Services to include (default: mysql)'
+complete -c sailinit -s j -l json -d 'Output in JSON format'
+complete -c sailinit -s p -l port -d 'Print APP_PORT for current project'
+complete -c sailinit -l completion -r -f -a 'bash zsh fish' -d 'Generate shell completion script'
+`)
+	default:
+		printError(fmt.Sprintf("Unknown shell: %s. Supported shells: bash, zsh, fish", shell))
+		os.Exit(1)
+	}
+}
+
 func main() {
-	versionFlag := flag.Bool("version", false, "Print version and exit")
-	listFlag := flag.Bool("list", false, "List all registered projects with their port suffixes")
-	statusFlag := flag.Bool("status", false, "Show status of all registered projects")
-	cleanFlag := flag.Bool("clean", false, "Remove entries for project directories that no longer exist")
-	removeFlag := flag.Bool("remove", false, "Remove the current project from port registry")
-	stopFlag := flag.Bool("stop", false, "Run sail stop in the current project")
-	downFlag := flag.Bool("down", false, "Run sail down in the current project")
-	freshFlag := flag.Bool("fresh", false, "Force re-run composer install even if vendor/bin/sail exists")
-	resetDbFlag := flag.Bool("reset-db", false, "Reset database settings to Sail defaults (mysql, laravel, sail/password)")
-	dryRunFlag := flag.Bool("dry-run", false, "Show what would happen without making changes")
-	newFlag := flag.String("new", "", "Create a new Laravel project with the given name (e.g. --new my-blog)")
+	var (
+		versionFlag    bool
+		listFlag       bool
+		statusFlag     bool
+		cleanFlag      bool
+		removeFlag     bool
+		stopFlag       bool
+		downFlag       bool
+		freshFlag      bool
+		resetDbFlag    bool
+		dryRunFlag     bool
+		yesFlag        bool
+		jsonFlag       bool
+		portFlag       bool
+		newFlag        string
+		withFlag       string
+		completionFlag string
+	)
+
+	flag.BoolVar(&versionFlag, "version", false, "Print version and exit")
+	flag.BoolVar(&versionFlag, "v", false, "Print version and exit (shorthand)")
+
+	flag.BoolVar(&listFlag, "list", false, "List all registered projects with their port suffixes")
+	flag.BoolVar(&listFlag, "l", false, "List all registered projects (shorthand)")
+
+	flag.BoolVar(&statusFlag, "status", false, "Show status of all registered projects")
+	flag.BoolVar(&statusFlag, "s", false, "Show status of all registered projects (shorthand)")
+
+	flag.BoolVar(&cleanFlag, "clean", false, "Remove entries for project directories that no longer exist")
+	flag.BoolVar(&cleanFlag, "c", false, "Remove entries for project directories that no longer exist (shorthand)")
+
+	flag.BoolVar(&removeFlag, "remove", false, "Remove the current project from port registry")
+	flag.BoolVar(&removeFlag, "r", false, "Remove the current project from port registry (shorthand)")
+
+	flag.BoolVar(&stopFlag, "stop", false, "Run sail stop in the current project")
+	flag.BoolVar(&downFlag, "down", false, "Run sail down in the current project")
+
+	flag.BoolVar(&freshFlag, "fresh", false, "Force re-run composer install even if vendor/bin/sail exists")
+	flag.BoolVar(&freshFlag, "f", false, "Force re-run composer install (shorthand)")
+
+	flag.BoolVar(&resetDbFlag, "reset-db", false, "Reset database settings to Sail defaults")
+	flag.BoolVar(&dryRunFlag, "dry-run", false, "Show what would happen without making changes")
+	flag.BoolVar(&dryRunFlag, "d", false, "Show what would happen without making changes (shorthand)")
+
+	flag.BoolVar(&yesFlag, "yes", false, "Automatic yes to prompts; assume yes to all non-interactive prompts")
+	flag.BoolVar(&yesFlag, "y", false, "Automatic yes to prompts (shorthand)")
+	flag.BoolVar(&yesFlag, "non-interactive", false, "Non-interactive mode")
+
+	flag.BoolVar(&jsonFlag, "json", false, "Output project details in JSON format")
+	flag.BoolVar(&jsonFlag, "j", false, "Output project details in JSON format (shorthand)")
+
+	flag.BoolVar(&portFlag, "port", false, "Print calculated APP_PORT for current project and exit")
+	flag.BoolVar(&portFlag, "p", false, "Print calculated APP_PORT for current project and exit (shorthand)")
+
+	flag.StringVar(&newFlag, "new", "", "Create a new Laravel project with the given name")
+	flag.StringVar(&newFlag, "n", "", "Create a new Laravel project with the given name (shorthand)")
+
+	flag.StringVar(&withFlag, "with", "mysql", "Services to include when creating a new project (e.g. mysql,redis,mailpit)")
+	flag.StringVar(&withFlag, "w", "mysql", "Services to include when creating a new project (shorthand)")
+
+	flag.StringVar(&completionFlag, "completion", "", "Generate shell completion script (bash, zsh, fish)")
+
 	flag.Parse()
 
+	// Handle --completion flag
+	if completionFlag != "" {
+		generateCompletion(completionFlag)
+		os.Exit(0)
+	}
+
 	// Handle --version flag
-	if *versionFlag {
+	if versionFlag {
 		fmt.Printf("sailinit %s\n", version)
 		os.Exit(0)
 	}
 
-	// Handle --list flag
-	if *listFlag {
-		handleList()
+	// Handle --port flag
+	if portFlag {
+		projectDir, err := os.Getwd()
+		if err != nil {
+			printError(fmt.Sprintf("Error getting current directory: %v", err))
+			os.Exit(1)
+		}
+		suggested, _, _, err := getSuggestedSuffix(projectDir)
+		if err != nil {
+			printError(fmt.Sprintf("Error determining port: %v", err))
+			os.Exit(1)
+		}
+		ports := CalculatePorts(suggested)
+		fmt.Println(ports["APP_PORT"])
+		os.Exit(0)
+	}
+
+	// Handle --list or standalone --json flag
+	if listFlag || jsonFlag {
+		handleList(jsonFlag)
 		os.Exit(0)
 	}
 
 	// Handle --status flag
-	if *statusFlag {
+	if statusFlag {
 		if err := showProjectStatus(); err != nil {
 			printError(fmt.Sprintf("Error showing status: %v", err))
 			os.Exit(1)
@@ -85,7 +295,7 @@ func main() {
 	}
 
 	// Handle --clean flag
-	if *cleanFlag {
+	if cleanFlag {
 		count, err := CleanOrphanedProjects()
 		if err != nil {
 			printError(fmt.Sprintf("Error cleaning orphaned projects: %v", err))
@@ -96,7 +306,7 @@ func main() {
 	}
 
 	// Handle --remove flag
-	if *removeFlag {
+	if removeFlag {
 		projectDir, err := os.Getwd()
 		if err != nil {
 			printError(fmt.Sprintf("Error getting current directory: %v", err))
@@ -111,7 +321,7 @@ func main() {
 	}
 
 	// Handle --stop flag
-	if *stopFlag {
+	if stopFlag {
 		projectDir, err := os.Getwd()
 		if err != nil {
 			printError(fmt.Sprintf("Error getting current directory: %v", err))
@@ -125,7 +335,7 @@ func main() {
 	}
 
 	// Handle --down flag
-	if *downFlag {
+	if downFlag {
 		projectDir, err := os.Getwd()
 		if err != nil {
 			printError(fmt.Sprintf("Error getting current directory: %v", err))
@@ -139,17 +349,22 @@ func main() {
 	}
 
 	// Handle --new flag: create a new Laravel project
-	if *newFlag != "" {
-		projectName := *newFlag
-		printHeader(fmt.Sprintf("Creating new Laravel project: %s", projectName))
+	if newFlag != "" {
+		projectName := newFlag
+		printHeader(fmt.Sprintf("Creating new Laravel project: %s (services: %s)", projectName, withFlag))
 
-		if *dryRunFlag {
-			printInfo(fmt.Sprintf("[dry-run] Would run: curl -s \"https://laravel.build/%s?with=mysql\" | bash", projectName))
+		if dryRunFlag {
+			printInfo(fmt.Sprintf("[dry-run] Would run: curl -s \"https://laravel.build/%s?with=%s\" | bash", projectName, withFlag))
 			printInfo(fmt.Sprintf("[dry-run] Would then set up ports in ./%s", projectName))
 			os.Exit(0)
 		}
 
-		if err := createNewProject(projectName); err != nil {
+		if err := checkDockerDaemon(); err != nil {
+			printError(fmt.Sprintf("Error: %v", err))
+			os.Exit(1)
+		}
+
+		if err := createNewProject(projectName, withFlag); err != nil {
 			printError(fmt.Sprintf("Error creating project: %v", err))
 			os.Exit(1)
 		}
@@ -172,10 +387,7 @@ func main() {
 		// Stop containers started by laravel.build so we can reconfigure ports
 		sailPath := filepath.Join(absDir, "vendor", "bin", "sail")
 		if _, err := os.Stat(sailPath); err == nil {
-			stopCmd := exec.Command(sailPath, "down")
-			stopCmd.Stdout = os.Stdout
-			stopCmd.Stderr = os.Stderr
-			stopCmd.Run() // best-effort
+			execRunner(sailPath, absDir, "", "down")
 		}
 	}
 
@@ -186,6 +398,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	checkLaravelProject(projectDir, yesFlag)
+
 	detectedVersion := detectPHPVersion(projectDir)
 	phpVersion := "84" // Default
 
@@ -195,11 +409,13 @@ func main() {
 		phpVersion = args[0]
 		if detectedVersion != "" && phpVersion != detectedVersion {
 			printWarning(fmt.Sprintf("Warning: Manually specified PHP version (%s) differs from detected version in compose file (%s).", phpVersion, detectedVersion))
-			fmt.Print("Continue anyway? [y/N]: ")
-			var confirm string
-			fmt.Scanln(&confirm)
-			if strings.ToLower(confirm) != "y" {
-				os.Exit(0)
+			if !yesFlag {
+				fmt.Print("Continue anyway? [y/N]: ")
+				var confirm string
+				fmt.Scanln(&confirm)
+				if strings.ToLower(confirm) != "y" {
+					os.Exit(0)
+				}
 			}
 		}
 	} else if detectedVersion != "" {
@@ -219,26 +435,30 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	if !existed && !existing {
 		printInfo("First-ever setup detected.")
-		for {
-			fmt.Print("Enter the starting port suffix for your projects [default 48]: ")
-			input, _ := reader.ReadString('\n')
-			input = strings.TrimSpace(input)
-			if input == "" {
-				suggested = 48
+		if yesFlag {
+			suggested = 48
+		} else {
+			for {
+				fmt.Print("Enter the starting port suffix for your projects [default 48]: ")
+				input, _ := reader.ReadString('\n')
+				input = strings.TrimSpace(input)
+				if input == "" {
+					suggested = 48
+					break
+				}
+				var startSuffix int
+				_, err := fmt.Sscanf(input, "%d", &startSuffix)
+				if err != nil {
+					printError("Invalid suffix. Please enter a number.")
+					continue
+				}
+				if err := ValidateSuffix(startSuffix); err != nil {
+					printError(fmt.Sprintf("Invalid suffix: %v", err))
+					continue
+				}
+				suggested = startSuffix
 				break
 			}
-			var startSuffix int
-			_, err := fmt.Sscanf(input, "%d", &startSuffix)
-			if err != nil {
-				printError("Invalid suffix. Please enter a number.")
-				continue
-			}
-			if err := ValidateSuffix(startSuffix); err != nil {
-				printError(fmt.Sprintf("Invalid suffix: %v", err))
-				continue
-			}
-			suggested = startSuffix
-			break
 		}
 	}
 
@@ -247,35 +467,41 @@ func main() {
 		printInfo(fmt.Sprintf("Detected existing port suffix: %d", suffix))
 	}
 
-	for {
-		fmt.Printf("Use suffix [%d]? (Press Enter to confirm, or type new suffix): ", suffix)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(input)
+	if !yesFlag {
+		for {
+			fmt.Printf("Use suffix [%d]? (Press Enter to confirm, or type new suffix): ", suffix)
+			input, _ := reader.ReadString('\n')
+			input = strings.TrimSpace(input)
 
-		if input != "" {
-			var newSuffix int
-			_, err := fmt.Sscanf(input, "%d", &newSuffix)
-			if err != nil {
-				printError("Invalid suffix. Please enter a number.")
+			if input != "" {
+				var newSuffix int
+				_, err := fmt.Sscanf(input, "%d", &newSuffix)
+				if err != nil {
+					printError("Invalid suffix. Please enter a number.")
+					continue
+				}
+				if err := ValidateSuffix(newSuffix); err != nil {
+					printError(fmt.Sprintf("Invalid suffix: %v", err))
+					continue
+				}
+				suffix = newSuffix
+			}
+
+			// Validate against collisions
+			if otherPath, inUse := isSuffixInUseByOther(projectDir, suffix); inUse {
+				printError(fmt.Sprintf("Error: Suffix %d is already in use by another project:\n%s", suffix, otherPath))
+				if input == "" {
+					suffix = suggested
+				}
 				continue
 			}
-			if err := ValidateSuffix(newSuffix); err != nil {
-				printError(fmt.Sprintf("Invalid suffix: %v", err))
-				continue
-			}
-			suffix = newSuffix
+			break
 		}
-
-		// Validate against collisions
+	} else {
 		if otherPath, inUse := isSuffixInUseByOther(projectDir, suffix); inUse {
 			printError(fmt.Sprintf("Error: Suffix %d is already in use by another project:\n%s", suffix, otherPath))
-			// Reset suffix to suggested and retry loop but only if user didn't enter it
-			if input == "" {
-				suffix = suggested
-			}
-			continue
+			os.Exit(1)
 		}
-		break
 	}
 
 	// Check port availability
@@ -285,16 +511,18 @@ func main() {
 		for _, bp := range busyPorts {
 			printWarning(fmt.Sprintf("  %s: %d", bp.Name, bp.Port))
 		}
-		fmt.Print("Continue anyway? [y/N]: ")
-		var confirm string
-		fmt.Scanln(&confirm)
-		if strings.ToLower(confirm) != "y" {
-			os.Exit(0)
+		if !yesFlag {
+			fmt.Print("Continue anyway? [y/N]: ")
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(confirm) != "y" {
+				os.Exit(0)
+			}
 		}
 	}
 
 	// Save the confirmed suffix
-	if *dryRunFlag {
+	if dryRunFlag {
 		printInfo(fmt.Sprintf("[dry-run] Would save suffix %d for project %s", suffix, projectDir))
 	} else {
 		if err := saveProjectSuffix(projectDir, suffix); err != nil {
@@ -305,7 +533,7 @@ func main() {
 	printInfo(fmt.Sprintf("Using port suffix: %d", suffix))
 
 	// 1. Setup .env
-	if *dryRunFlag {
+	if dryRunFlag {
 		printInfo(fmt.Sprintf("[dry-run] Would configure .env with suffix %d", suffix))
 		printInfo(fmt.Sprintf("[dry-run]   APP_PORT=%d", 8000+suffix))
 		printInfo(fmt.Sprintf("[dry-run]   FORWARD_DB_PORT=%d", 3300+suffix))
@@ -315,24 +543,24 @@ func main() {
 		printInfo(fmt.Sprintf("[dry-run]   FORWARD_MAILPIT_PORT=%d", 1000+suffix))
 		printInfo(fmt.Sprintf("[dry-run]   VITE_PORT=%d", 5100+suffix))
 	} else {
-		if err := setupEnv(projectDir, suffix, *resetDbFlag); err != nil {
+		if err := setupEnv(projectDir, suffix, resetDbFlag); err != nil {
 			printError(fmt.Sprintf("Error setting up .env: %v", err))
 			os.Exit(1)
 		}
 	}
 
 	// 2. Initial sailinit logic (Docker composer install)
-	if *dryRunFlag {
+	if dryRunFlag {
 		printInfo(fmt.Sprintf("[dry-run] Would run composer install via Docker (PHP %s)", phpVersion))
 	} else {
-		if err := runSailInit(phpVersion, projectDir, *freshFlag); err != nil {
+		if err := runSailInit(phpVersion, projectDir, freshFlag); err != nil {
 			printError(fmt.Sprintf("Error running sailinit: %v", err))
 			os.Exit(1)
 		}
 	}
 
 	// 3. Run sail up -d
-	if *dryRunFlag {
+	if dryRunFlag {
 		printInfo("[dry-run] Would run sail up -d")
 	} else {
 		if err := runSailUp(projectDir); err != nil {
@@ -346,21 +574,50 @@ func main() {
 	printInfo(fmt.Sprintf("Mailpit Dashboard: http://localhost:%d", 18100+suffix))
 }
 
-func handleList() {
+func handleList(jsonFormat bool) {
 	projects, err := ListProjects()
 	if err != nil {
 		printError(fmt.Sprintf("Error listing projects: %v", err))
 		os.Exit(1)
 	}
+
+	sort.Slice(projects, func(i, j int) bool {
+		return projects[i].Suffix < projects[j].Suffix
+	})
+
+	if jsonFormat {
+		type ProjectJSON struct {
+			Path       string         `json:"path"`
+			Suffix     int            `json:"suffix"`
+			Exists     bool           `json:"exists"`
+			Ports      map[string]int `json:"ports"`
+			Containers string         `json:"containers,omitempty"`
+		}
+
+		var out []ProjectJSON
+		for _, p := range projects {
+			containers := "missing"
+			if p.Exists {
+				containers = getContainerStatus(p.Path)
+			}
+			out = append(out, ProjectJSON{
+				Path:       p.Path,
+				Suffix:     p.Suffix,
+				Exists:     p.Exists,
+				Ports:      CalculatePorts(p.Suffix),
+				Containers: containers,
+			})
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		encoder.Encode(out)
+		return
+	}
+
 	if len(projects) == 0 {
 		printInfo("No registered projects found.")
 		return
 	}
-
-	// Sort by suffix for consistent output
-	sort.Slice(projects, func(i, j int) bool {
-		return projects[i].Suffix < projects[j].Suffix
-	})
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
@@ -377,33 +634,32 @@ func handleList() {
 		if !p.Exists {
 			status = colorize(colorRed, "[X] Missing")
 		}
+		ports := CalculatePorts(p.Suffix)
 		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%s\n",
 			p.Path,
 			p.Suffix,
-			8000+p.Suffix,
-			3300+p.Suffix,
-			6300+p.Suffix,
-			5100+p.Suffix,
+			ports["APP_PORT"],
+			ports["FORWARD_DB_PORT"],
+			ports["FORWARD_REDIS_PORT"],
+			ports["VITE_PORT"],
 			status,
 		)
 	}
 	w.Flush()
 }
 
-func createNewProject(name string) error {
-	// Check the directory doesn't already exist
+func createNewProject(name, services string) error {
 	if _, err := os.Stat(name); err == nil {
 		return fmt.Errorf("directory %q already exists", name)
 	}
+	if services == "" {
+		services = "mysql"
+	}
 
-	url := fmt.Sprintf("https://laravel.build/%s?with=mysql", name)
+	url := fmt.Sprintf("https://laravel.build/%s?with=%s", name, services)
 	printInfo(fmt.Sprintf("Downloading from %s ...", url))
 
-	cmd := exec.Command("bash")
-	cmd.Stdin = strings.NewReader(fmt.Sprintf(`curl -s "%s" | bash`, url))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return execRunner("bash", "", fmt.Sprintf(`curl -s "%s" | bash`, url))
 }
 
 func runSailInit(phpVersion, projectDir string, forceInstall bool) error {
@@ -415,23 +671,22 @@ func runSailInit(phpVersion, projectDir string, forceInstall bool) error {
 		}
 	}
 
-	printInfo("Installing composer dependencies via Docker...")
+	if err := checkDockerDaemon(); err != nil {
+		return err
+	}
+
+	printInfo("Installing composer dependencies via Docker (composer:latest)...")
 
 	currentUser := fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
-	dockerImage := fmt.Sprintf("laravelsail/php%s-composer:latest", phpVersion)
+	dockerImage := "composer:latest"
 
-	cmd := exec.Command("docker", "run", "--rm",
+	return execRunner("docker", "", "", "run", "--rm",
 		"-u", currentUser,
 		"-v", fmt.Sprintf("%s:/var/www/html", projectDir),
 		"-w", "/var/www/html",
 		dockerImage,
 		"composer", "install", "--ignore-platform-reqs",
 	)
-
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
 }
 
 func setupEnv(projectDir string, suffix int, resetDb bool) error {
@@ -485,16 +740,27 @@ func setupEnv(projectDir string, suffix int, resetDb bool) error {
 		"FORWARD_MAILPIT_DASHBOARD_PORT",
 		"FORWARD_MAILPIT_PORT",
 		"VITE_PORT",
+		"FORWARD_MINIO_PORT",
+		"FORWARD_MINIO_CONSOLE_PORT",
+		"FORWARD_TYPESENSE_PORT",
+		"FORWARD_SOKETI_PORT",
+		"FORWARD_SELENIUM_PORT",
 	}
 
+	calculatedPorts := CalculatePorts(suffix)
 	portValues := map[string]string{
-		"APP_PORT":                       fmt.Sprintf("%d", 8000+suffix),
-		"FORWARD_DB_PORT":                fmt.Sprintf("%d", 3300+suffix),
-		"FORWARD_REDIS_PORT":             fmt.Sprintf("%d", 6300+suffix),
-		"FORWARD_MEILISEARCH_PORT":       fmt.Sprintf("%d", 7700+suffix),
-		"FORWARD_MAILPIT_DASHBOARD_PORT": fmt.Sprintf("%d", 18100+suffix),
-		"FORWARD_MAILPIT_PORT":           fmt.Sprintf("%d", 1000+suffix),
-		"VITE_PORT":                      fmt.Sprintf("%d", 5100+suffix),
+		"APP_PORT":                       fmt.Sprintf("%d", calculatedPorts["APP_PORT"]),
+		"FORWARD_DB_PORT":                fmt.Sprintf("%d", calculatedPorts["FORWARD_DB_PORT"]),
+		"FORWARD_REDIS_PORT":             fmt.Sprintf("%d", calculatedPorts["FORWARD_REDIS_PORT"]),
+		"FORWARD_MEILISEARCH_PORT":       fmt.Sprintf("%d", calculatedPorts["FORWARD_MEILISEARCH_PORT"]),
+		"FORWARD_MAILPIT_DASHBOARD_PORT": fmt.Sprintf("%d", calculatedPorts["FORWARD_MAILPIT_DASHBOARD_PORT"]),
+		"FORWARD_MAILPIT_PORT":           fmt.Sprintf("%d", calculatedPorts["FORWARD_MAILPIT_PORT"]),
+		"VITE_PORT":                      fmt.Sprintf("%d", calculatedPorts["VITE_PORT"]),
+		"FORWARD_MINIO_PORT":             fmt.Sprintf("%d", calculatedPorts["FORWARD_MINIO_PORT"]),
+		"FORWARD_MINIO_CONSOLE_PORT":     fmt.Sprintf("%d", calculatedPorts["FORWARD_MINIO_CONSOLE_PORT"]),
+		"FORWARD_TYPESENSE_PORT":         fmt.Sprintf("%d", calculatedPorts["FORWARD_TYPESENSE_PORT"]),
+		"FORWARD_SOKETI_PORT":            fmt.Sprintf("%d", calculatedPorts["FORWARD_SOKETI_PORT"]),
+		"FORWARD_SELENIUM_PORT":          fmt.Sprintf("%d", calculatedPorts["FORWARD_SELENIUM_PORT"]),
 	}
 
 	var newLines []string
@@ -561,6 +827,11 @@ func setupEnv(projectDir string, suffix int, resetDb bool) error {
 	newLines = append(newLines, fmt.Sprintf("FORWARD_MAILPIT_DASHBOARD_PORT=%s", portValues["FORWARD_MAILPIT_DASHBOARD_PORT"]))
 	newLines = append(newLines, fmt.Sprintf("FORWARD_MAILPIT_PORT=%s", portValues["FORWARD_MAILPIT_PORT"]))
 	newLines = append(newLines, fmt.Sprintf("VITE_PORT=%s", portValues["VITE_PORT"]))
+	newLines = append(newLines, fmt.Sprintf("FORWARD_MINIO_PORT=%s", portValues["FORWARD_MINIO_PORT"]))
+	newLines = append(newLines, fmt.Sprintf("FORWARD_MINIO_CONSOLE_PORT=%s", portValues["FORWARD_MINIO_CONSOLE_PORT"]))
+	newLines = append(newLines, fmt.Sprintf("FORWARD_TYPESENSE_PORT=%s", portValues["FORWARD_TYPESENSE_PORT"]))
+	newLines = append(newLines, fmt.Sprintf("FORWARD_SOKETI_PORT=%s", portValues["FORWARD_SOKETI_PORT"]))
+	newLines = append(newLines, fmt.Sprintf("FORWARD_SELENIUM_PORT=%s", portValues["FORWARD_SELENIUM_PORT"]))
 
 	newLines = append(newLines, "") // 3. One empty line
 
@@ -571,18 +842,17 @@ func setupEnv(projectDir string, suffix int, resetDb bool) error {
 }
 
 func runSailUp(projectDir string) error {
-	printInfo("Starting Laravel Sail (sail up -d)...")
-
 	sailPath := filepath.Join(projectDir, "vendor", "bin", "sail")
 	if _, err := os.Stat(sailPath); os.IsNotExist(err) {
 		return fmt.Errorf("sail binary not found at %s", sailPath)
 	}
 
-	cmd := exec.Command(sailPath, "up", "-d")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if err := checkDockerDaemon(); err != nil {
+		return err
+	}
 
-	return cmd.Run()
+	printInfo("Starting Laravel Sail (sail up -d)...")
+	return execRunner(sailPath, projectDir, "", "up", "-d")
 }
 
 func runSailStop(projectDir string) error {
@@ -591,11 +861,12 @@ func runSailStop(projectDir string) error {
 		return fmt.Errorf("sail binary not found at %s", sailPath)
 	}
 
+	if err := checkDockerDaemon(); err != nil {
+		return err
+	}
+
 	printInfo("Stopping Laravel Sail...")
-	cmd := exec.Command(sailPath, "stop")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return execRunner(sailPath, projectDir, "", "stop")
 }
 
 func runSailDown(projectDir string) error {
@@ -604,11 +875,12 @@ func runSailDown(projectDir string) error {
 		return fmt.Errorf("sail binary not found at %s", sailPath)
 	}
 
+	if err := checkDockerDaemon(); err != nil {
+		return err
+	}
+
 	printInfo("Running sail down...")
-	cmd := exec.Command(sailPath, "down")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return execRunner(sailPath, projectDir, "", "down")
 }
 
 func getContainerStatus(projectDir string) string {
@@ -617,9 +889,7 @@ func getContainerStatus(projectDir string) string {
 		return "no sail"
 	}
 
-	cmd := exec.Command(sailPath, "ps", "--format", "{{.State}}")
-	cmd.Dir = projectDir
-	output, err := cmd.Output()
+	output, err := execOutputRunner(sailPath, projectDir, "ps", "--format", "{{.State}}")
 	if err != nil {
 		return "unknown"
 	}
@@ -664,10 +934,11 @@ func showProjectStatus() error {
 		if p.Exists {
 			containers = getContainerStatus(p.Path)
 		}
+		ports := CalculatePorts(p.Suffix)
 		fmt.Fprintf(w, "%s\t%d\t%d\t%s\n",
 			p.Path,
 			p.Suffix,
-			8000+p.Suffix,
+			ports["APP_PORT"],
 			containers,
 		)
 	}

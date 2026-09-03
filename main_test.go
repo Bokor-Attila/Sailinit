@@ -1,11 +1,43 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func setupMockRunners(t *testing.T) (func(), *[]string) {
+	t.Helper()
+	origRunner := execRunner
+	origOutputRunner := execOutputRunner
+
+	var executed []string
+
+	execRunner = func(name string, dir string, stdin string, args ...string) error {
+		full := fmt.Sprintf("%s %s %s", name, strings.Join(args, " "), stdin)
+		executed = append(executed, strings.TrimSpace(full))
+		return nil
+	}
+
+	execOutputRunner = func(name string, dir string, args ...string) ([]byte, error) {
+		if name == "docker" && len(args) > 0 && args[0] == "info" {
+			return []byte("Client: Docker Engine"), nil
+		}
+		if strings.HasSuffix(name, "sail") && len(args) > 0 && args[0] == "ps" {
+			return []byte("running\nrunning"), nil
+		}
+		return []byte(""), nil
+	}
+
+	cleanup := func() {
+		execRunner = origRunner
+		execOutputRunner = origOutputRunner
+	}
+
+	return cleanup, &executed
+}
 
 func TestDetectPHPVersion(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "php-detect-test-*")
@@ -77,6 +109,9 @@ func TestRunSailInitSkipsWhenSailExists(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
+	cleanup, _ := setupMockRunners(t)
+	defer cleanup()
+
 	// Create vendor/bin/sail to simulate existing installation
 	sailDir := filepath.Join(tempDir, "vendor", "bin")
 	if err := os.MkdirAll(sailDir, 0755); err != nil {
@@ -101,6 +136,9 @@ func TestRunSailInitRunsWithFreshFlag(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
+	cleanup, executed := setupMockRunners(t)
+	defer cleanup()
+
 	// Create vendor/bin/sail to simulate existing installation
 	sailDir := filepath.Join(tempDir, "vendor", "bin")
 	if err := os.MkdirAll(sailDir, 0755); err != nil {
@@ -111,18 +149,14 @@ func TestRunSailInitRunsWithFreshFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// With forceInstall=true, should attempt to run docker (which will fail in test env)
+	// With forceInstall=true, should run mocked runner
 	err = runSailInit("84", tempDir, true)
-
-	// We expect an error because docker won't run properly in tests,
-	// but the important thing is that it TRIED to run (didn't skip)
-	if err == nil {
-		t.Error("Expected error when running docker in test environment with forceInstall=true")
+	if err != nil {
+		t.Fatalf("Expected nil error with mock runner, got: %v", err)
 	}
 
-	// Verify it's a docker-related error (tried to run) not an early return
-	if err != nil && !strings.Contains(err.Error(), "exit status") && !strings.Contains(err.Error(), "executable file not found") {
-		t.Errorf("Expected docker execution error, got: %v", err)
+	if len(*executed) == 0 {
+		t.Error("Expected docker command to be executed")
 	}
 }
 
@@ -138,6 +172,9 @@ func TestRunSailStopNoSail(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	cleanup, _ := setupMockRunners(t)
+	defer cleanup()
 
 	err = runSailStop(tempDir)
 	if err == nil {
@@ -155,6 +192,9 @@ func TestRunSailDownNoSail(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
+	cleanup, _ := setupMockRunners(t)
+	defer cleanup()
+
 	err = runSailDown(tempDir)
 	if err == nil {
 		t.Error("Expected error when sail binary doesn't exist")
@@ -170,6 +210,9 @@ func TestRunSailUpNoSail(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tempDir)
+
+	cleanup, _ := setupMockRunners(t)
+	defer cleanup()
 
 	err = runSailUp(tempDir)
 	if err == nil {
@@ -191,4 +234,84 @@ func TestGetContainerStatusNoSail(t *testing.T) {
 	if status != "no sail" {
 		t.Errorf("Expected %q, got %q", "no sail", status)
 	}
+}
+
+func TestCreateNewProjectWithServices(t *testing.T) {
+	cleanup, executed := setupMockRunners(t)
+	defer cleanup()
+
+	tempDir, err := os.MkdirTemp("", "create-new-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	target := filepath.Join(tempDir, "my-app")
+
+	err = createNewProject(target, "mysql,redis,mailpit")
+	if err != nil {
+		t.Fatalf("createNewProject failed: %v", err)
+	}
+
+	if len(*executed) != 1 {
+		t.Fatalf("Expected 1 command executed, got %d", len(*executed))
+	}
+
+	cmdStr := (*executed)[0]
+	if !strings.Contains(cmdStr, "https://laravel.build/") || !strings.Contains(cmdStr, "with=mysql,redis,mailpit") {
+		t.Errorf("Expected command to contain custom services URL, got: %s", cmdStr)
+	}
+}
+
+func TestCheckDockerDaemon(t *testing.T) {
+	cleanup, _ := setupMockRunners(t)
+	defer cleanup()
+
+	if err := checkDockerDaemon(); err != nil {
+		t.Errorf("Expected checkDockerDaemon to pass with mock runner, got %v", err)
+	}
+}
+
+func TestGenerateCompletion(t *testing.T) {
+	shells := []string{"bash", "zsh", "fish"}
+	for _, s := range shells {
+		generateCompletion(s)
+	}
+}
+
+func TestCheckLaravelProject(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "check-laravel-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Non-Laravel directory with yesFlag=true should not exit or error
+	checkLaravelProject(tempDir, true)
+
+	// Create composer.json to simulate a Laravel project
+	if err := os.WriteFile(filepath.Join(tempDir, "composer.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	checkLaravelProject(tempDir, false)
+}
+
+func TestHandleListJSON(t *testing.T) {
+	tempDir, cleanup := setupTestState(t)
+	defer cleanup()
+
+	// Register a project
+	projDir := filepath.Join(tempDir, "my-app")
+	if err := os.MkdirAll(projDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveProjectSuffix(projDir, 50); err != nil {
+		t.Fatal(err)
+	}
+
+	mockCleanup, _ := setupMockRunners(t)
+	defer mockCleanup()
+
+	// Output in JSON format
+	handleList(true)
 }
