@@ -228,17 +228,10 @@ func TestRunDoctorJSONShape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = w
-	healthy := runDoctor(proj, true)
-	w.Close()
-	os.Stdout = stdout
-
-	output := readAll(t, r)
+	var healthy bool
+	output, _ := captureStreams(t, func() {
+		healthy = runDoctor(proj, true)
+	})
 
 	var out struct {
 		Healthy     bool         `json:"healthy"`

@@ -14,11 +14,31 @@ A Go-based tool to automate the initialization of Laravel Sail projects with int
 - **Clean .env Formatting**: Groups all port settings at the end of the file with proper spacing.
 - **One-Step Startup**: Automatically runs `sail up -d` after configuration.
 - **Colored Output**: ANSI-colored terminal output with `NO_COLOR` support.
-- **Dry-Run Mode**: Preview what would happen without making any changes.
+- **Dry-Run Mode**: Preview what would happen without making any changes, including registry edits.
 - **Sail Lifecycle**: Stop, bring down, and check status of Sail containers.
 - **Self-Update**: Upgrade to the latest release in place with `--upgrade`, with checksum verification.
 - **Diagnostics**: `--doctor` checks the registry, duplicate suffixes, `.env` drift, and port availability.
 - **Quick Open**: `--open` launches the current project's URL in your browser.
+- **Scriptable Output**: data on stdout, messages on stderr, and distinct exit codes per outcome.
+- **Isolated State**: point `SAILINIT_HOME` at any directory to sandbox the registry and config.
+
+## Breaking Changes
+
+Three behaviours changed to make `sailinit` safe to drive from scripts and
+agents. Each is a deliberate break:
+
+1. **`--doctor` exits `4`** (was `1`) when a check FAILs. Gates written as
+   `sailinit --doctor || handle_failure` still work; anything comparing the code
+   to `1` needs updating.
+2. **No terminal and no `-y` is now an error**, exit `3`. Previously a piped or
+   detached run silently took the defaults, or exited `0` having done nothing.
+   Add `-y` to unattended invocations.
+3. **Messages moved to stderr.** Progress, warnings and errors no longer appear
+   on stdout; stdout carries data only.
+4. **`containers` in `--list -j` is now an object**, `{"state": ..., "running": N}`,
+   where `state` is one of `running`, `stopped`, `no sail`, `unknown`, `missing`.
+   It used to be a rendered string such as `"3 running"` — and carried ANSI
+   colour codes when stdout was a terminal.
 
 ## Installation
 
@@ -78,6 +98,7 @@ sailinit [flags] [php_version]
 | `--with <svcs>`| `-w <svcs>` | Services to include for new project (default: `mysql`, e.g. `mysql,redis,mailpit`) |
 | `--json` | `-j` | Output registered projects in structured JSON format |
 | `--port` | `-p` | Print calculated `APP_PORT` for current project and exit |
+| `--ports` | | Print every calculated port for the current project and exit |
 | `--yes` | `-y` | Automatic yes to prompts; assume non-interactive mode |
 | `--dry-run` | `-d` | Show what would happen without making changes |
 | `--open` | `-o` | Open the current project's URL in the default browser |
@@ -106,6 +127,12 @@ sailinit -y
 
 # Print just the assigned APP_PORT for current directory (useful in scripts)
 sailinit -p
+
+# Print every port for the current project
+sailinit --ports
+
+# ...as JSON
+sailinit --ports -j
 
 # Export all registered projects as JSON
 sailinit -l -j
@@ -140,6 +167,13 @@ sailinit -f
 # Preview what would happen without making any changes
 sailinit -d
 
+# Preview registry edits without writing them
+sailinit -c -d
+sailinit -r -d
+
+# Container status as JSON
+sailinit -s -j
+
 # Open the current project in your browser
 sailinit -o
 
@@ -158,6 +192,93 @@ sailinit -u -d
 # Generate zsh completion script
 eval "$(sailinit --completion zsh)"
 ```
+
+### Output Streams and Exit Codes
+
+`sailinit` is built to be driven by scripts, CI jobs and coding agents, so the
+two output streams have fixed jobs:
+
+| Stream | Carries |
+|---|---|
+| **stdout** | data only: JSON payloads, the `--port`/`--ports` values, the `--list`/`--status` tables, the `--doctor` report, completion scripts |
+| **stderr** | everything human-facing: progress, warnings, errors, prompts |
+
+`sailinit --list -j | jq` is therefore safe even when something goes wrong:
+the error goes to stderr and never lands inside the JSON.
+
+Exit codes:
+
+| Code | Name | Meaning |
+|---|---|---|
+| `0` | OK | The requested work finished |
+| `1` | Error | A runtime failure: Docker unreachable, a command returned non-zero, the registry was unreadable |
+| `2` | Usage | The invocation was wrong: unknown flag, bad argument, unsupported `--completion` shell |
+| `3` | Aborted | Nothing was done because a human was needed: a prompt was declined, or there was no terminal to ask on and `--yes` was not given |
+| `4` | Unhealthy | `--doctor` ran fine but at least one check FAILed |
+
+### Non-Interactive Use
+
+When `sailinit` needs to ask something but stdin is not a terminal, it refuses
+to guess. It explains what it was about to ask and exits `3`:
+
+```
+$ echo | sailinit
+sailinit: no TTY and -y not given
+  needs confirmation: ports 8051, 3351 already in use
+  re-run with -y to accept, or free the ports
+$ echo $?
+3
+```
+
+Pass `-y` to accept the defaults and run unattended:
+
+```bash
+sailinit -y
+```
+
+This applies to the first-ever run too, where the starting suffix would
+otherwise be prompted for, so a scripted first install is `sailinit -y`.
+
+### Isolating State with `SAILINIT_HOME`
+
+Set `SAILINIT_HOME` to keep the registry and the global config in a directory of
+your choosing:
+
+```bash
+SAILINIT_HOME=/tmp/sailinit-sandbox sailinit --ports
+```
+
+It holds `ports.json` and `config.json`, is created if missing, and takes
+precedence over every other location including the legacy
+`~/.laravel-sail-ports.json` — so a sandboxed run can neither read nor write
+your real registry. Useful for tests, CI, throwaway experiments, and for letting
+an agent inspect port allocation without touching your machine's state.
+
+### Reading Ports
+
+```bash
+sailinit --ports
+```
+
+Prints every port for the current project as `KEY=VALUE` lines, sorted, ready to
+`source`:
+
+```
+APP_PORT=8051
+FORWARD_DB_PORT=3351
+FORWARD_MAILPIT_DASHBOARD_PORT=18151
+...
+```
+
+With `-j` it emits `{"path": ..., "suffix": ..., "ports": {...}}`, where `ports`
+has the same shape as in `--list -j`.
+
+Prefer this over computing `8000 + suffix` yourself: the base ports are
+configurable, so a hardcoded offset is wrong on any machine with a custom
+`config.json` or `SAILINIT_BASE_*` environment variable.
+
+For a project that is not registered yet, the reported suffix is the one that
+*would* be assigned on the next run — a projection, not a commitment.
 
 ### Safety Checks
 
@@ -203,8 +324,10 @@ What it checks:
 | `.env` ports | FAIL | `.env` and the registry disagree about `APP_PORT` |
 | Port availability | WARN | Something already holds one of this project's ports |
 
-**Exit code** is `1` if any check FAILs and `0` otherwise, so `--doctor` works as
-a CI or pre-flight gate. WARN does not affect the exit code. Add `-j` for JSON.
+**Exit code** is `4` if any check FAILs and `0` otherwise, so `--doctor` works as
+a CI or pre-flight gate. `4` is distinct from `1` so a gate can tell "doctor
+found problems" from "doctor itself broke". WARN does not affect the exit code.
+Add `-j` for JSON.
 
 Checks that depend on the current directory are skipped when you are not inside
 a Laravel project, so `--doctor` is safe to run anywhere.
@@ -255,7 +378,7 @@ Notes:
 
 ### Custom Base Port Offsets
 
-By default, ports are calculated using default base offsets (`APP_PORT = 8000 + suffix`, etc.). You can customize the base ports globally by creating `~/.config/sailinit/config.json`:
+By default, ports are calculated using default base offsets (`APP_PORT = 8000 + suffix`, etc.). You can customize the base ports globally by creating `~/.config/sailinit/config.json` (or `$SAILINIT_HOME/config.json`):
 
 ```json
 {
@@ -297,6 +420,38 @@ Project                                   Suffix  App Port  Containers
 /Users/user/projects/blog                 51      8051      3 running
 /Users/user/projects/shop                 52      8052      stopped
 ```
+
+Add `-j` for the machine-readable form:
+
+```json
+[
+  {
+    "path": "/Users/user/projects/blog",
+    "suffix": 51,
+    "exists": true,
+    "app_port": 8051,
+    "containers": { "state": "running", "running": 3 }
+  }
+]
+```
+
+`state` is one of `running`, `stopped`, `no sail` (dependencies not installed),
+`unknown` (the `sail ps` call failed) or `missing` (the directory is gone). An
+empty registry yields `[]` rather than a message, so the output is always
+parseable.
+
+### Previewing Registry Changes
+
+`--clean` and `--remove` both edit the port registry, and both honour
+`--dry-run`:
+
+```bash
+sailinit -c -d   # list the orphaned entries that would be dropped
+sailinit -r -d   # show what removing this project would do
+```
+
+Nothing is written, and the preview lists exactly what the real run would
+touch.
 
 ## Creating New Projects
 
@@ -345,6 +500,7 @@ This prevents issues where custom database names get overwritten and then fail t
 
 ## How Port Management Works
 The tool maintains a state JSON file:
+- **`SAILINIT_HOME`**: `$SAILINIT_HOME/ports.json` when that variable is set; it wins over both locations below.
 - **Legacy location**: `~/.laravel-sail-ports.json` (auto-detected if present for backwards compatibility).
 - **New location**: `~/.config/sailinit/ports.json` (used for new installations).
 

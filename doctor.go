@@ -241,11 +241,13 @@ func runDoctor(projectDir string, jsonFormat bool) bool {
 			printError(fmt.Sprintf("Error encoding diagnostics: %v", err))
 			return false
 		}
-		fmt.Println(string(data))
+		fmt.Fprintln(stdout, string(data))
 		return healthy
 	}
 
-	printHeader("sailinit doctor")
+	// The report is this command's output, so all of it goes to stdout rather
+	// than through the print* helpers, which write to stderr.
+	fmt.Fprintln(stdout, colorize(colorBold, "sailinit doctor"))
 	for _, d := range diags {
 		var label string
 		switch d.Status {
@@ -256,17 +258,17 @@ func runDoctor(projectDir string, jsonFormat bool) bool {
 		default:
 			label = colorize(colorRed, "[FAIL]")
 		}
-		fmt.Printf("%s %s: %s\n", label, d.Name, d.Detail)
+		fmt.Fprintf(stdout, "%s %s: %s\n", label, d.Name, d.Detail)
 		if d.Fix != "" && d.Status != statusOK {
-			fmt.Printf("       %s\n", colorize(colorDim, "fix: "+d.Fix))
+			fmt.Fprintf(stdout, "       %s\n", colorize(colorDim, "fix: "+d.Fix))
 		}
 	}
 
-	fmt.Println()
+	fmt.Fprintln(stdout)
 	if healthy {
-		printSuccess("No problems found.")
+		fmt.Fprintln(stdout, colorize(colorGreen, "No problems found."))
 	} else {
-		printError("Problems found. See the suggested fixes above.")
+		fmt.Fprintln(stdout, colorize(colorRed, "Problems found. See the suggested fixes above."))
 	}
 	return healthy
 }

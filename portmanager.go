@@ -6,11 +6,17 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 // MaxPortSuffix is the highest valid suffix (65535 - 18100, the highest base port)
 const MaxPortSuffix = 47435
+
+// DefaultStartSuffix is the suffix the very first project gets when no registry
+// exists yet. --port and --ports project it too, so what they report matches
+// what a subsequent run would actually assign.
+const DefaultStartSuffix = 48
 
 // ValidateSuffix checks that a port suffix is within valid range.
 func ValidateSuffix(suffix int) error {
@@ -71,7 +77,18 @@ func DefaultGlobalConfig() GlobalConfig {
 	}
 }
 
+// sailinitHome returns the directory named by SAILINIT_HOME, or "" when it is
+// unset. When it is set, sailinit keeps both the registry and the global config
+// there and ignores the legacy home-directory files, so a sandboxed or scripted
+// run cannot pick up (or write to) the real ones.
+func sailinitHome() string {
+	return strings.TrimSpace(os.Getenv("SAILINIT_HOME"))
+}
+
 func getGlobalConfigPath() string {
+	if home := sailinitHome(); home != "" {
+		return filepath.Join(home, "config.json")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -206,8 +223,9 @@ func CheckSuffixPortsAvailable(suffix int) []BusyPort {
 	return busy
 }
 
-// RemoveProject removes a project from the port state file.
-func RemoveProject(projectDir string) error {
+// RemoveProject removes a project from the port state file. With dryRun it
+// reports what it would remove and leaves the registry untouched.
+func RemoveProject(projectDir string, dryRun bool) error {
 	state, _, err := loadPortState()
 	if err != nil {
 		return err
@@ -218,8 +236,14 @@ func RemoveProject(projectDir string) error {
 		return err
 	}
 
-	if _, ok := state.Projects[absDir]; !ok {
+	suffix, ok := state.Projects[absDir]
+	if !ok {
 		return fmt.Errorf("project not registered: %s", absDir)
+	}
+
+	if dryRun {
+		printInfo(fmt.Sprintf("[dry-run] Would remove %s (suffix %d) from the registry", absDir, suffix))
+		return nil
 	}
 
 	delete(state.Projects, absDir)
@@ -244,6 +268,16 @@ func getPortStatePath() (string, error) {
 	if testStatePathOverride != "" {
 		return testStatePathOverride, nil
 	}
+
+	// SAILINIT_HOME wins over every discovered location, including the legacy
+	// file, so an isolated registry stays isolated.
+	if dir := sailinitHome(); dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, "ports.json"), nil
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -463,7 +497,9 @@ func ListProjects() ([]ProjectInfo, error) {
 	return projects, nil
 }
 
-func CleanOrphanedProjects() (int, error) {
+// CleanOrphanedProjects drops registry entries whose directory no longer
+// exists. With dryRun it reports what it would drop and writes nothing.
+func CleanOrphanedProjects(dryRun bool) (int, error) {
 	state, _, err := loadPortState()
 	if err != nil {
 		return 0, err
@@ -476,9 +512,21 @@ func CleanOrphanedProjects() (int, error) {
 		}
 	}
 
+	// Sorted so a dry-run preview and the real run list the same thing in the
+	// same order.
+	sort.Strings(removed)
+
 	for _, path := range removed {
-		fmt.Printf("Removing orphaned project: %s (suffix %d)\n", path, state.Projects[path])
+		if dryRun {
+			printInfo(fmt.Sprintf("[dry-run] Would remove orphaned project: %s (suffix %d)", path, state.Projects[path]))
+			continue
+		}
+		printInfo(fmt.Sprintf("Removing orphaned project: %s (suffix %d)", path, state.Projects[path]))
 		delete(state.Projects, path)
+	}
+
+	if dryRun {
+		return len(removed), nil
 	}
 
 	if len(removed) > 0 {

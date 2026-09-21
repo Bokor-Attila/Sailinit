@@ -231,8 +231,11 @@ func TestGetContainerStatusNoSail(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	status := getContainerStatus(tempDir)
-	if status != "no sail" {
-		t.Errorf("Expected %q, got %q", "no sail", status)
+	if status.State != stateNoSail {
+		t.Errorf("Expected state %q, got %q", stateNoSail, status.State)
+	}
+	if status.IsRunning() {
+		t.Error("a project without sail must not report running containers")
 	}
 }
 
