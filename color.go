@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -15,19 +16,26 @@ const (
 	colorDim    = "\033[2m"
 )
 
-var colorsEnabled = initColorsEnabled()
+// stdout carries data: JSON payloads, the --port value, completion scripts,
+// the --list/--status tables and the --doctor report. stderr carries every
+// human-facing message, so piping stdout into a parser stays safe even when
+// something goes wrong. Both are variables so tests can capture them.
+var (
+	stdout io.Writer = os.Stdout
+	stderr io.Writer = os.Stderr
+)
 
-func initColorsEnabled() bool {
+var colorsEnabled = isTerminal(os.Stdout)
+var errColorsEnabled = isTerminal(os.Stderr)
+
+func isTerminal(f *os.File) bool {
 	if _, ok := os.LookupEnv("NO_COLOR"); ok {
 		return false
 	}
-	info, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return isTerminalFile(f)
 }
 
+// colorize wraps text for the stdout stream.
 func colorize(color, text string) string {
 	if !colorsEnabled {
 		return text
@@ -35,22 +43,31 @@ func colorize(color, text string) string {
 	return color + text + colorReset
 }
 
+// colorizeErr wraps text for the stderr stream, which may be a terminal even
+// when stdout is being piped (or the other way round).
+func colorizeErr(color, text string) string {
+	if !errColorsEnabled {
+		return text
+	}
+	return color + text + colorReset
+}
+
 func printSuccess(msg string) {
-	fmt.Println(colorize(colorGreen, msg))
+	fmt.Fprintln(stderr, colorizeErr(colorGreen, msg))
 }
 
 func printWarning(msg string) {
-	fmt.Println(colorize(colorYellow, msg))
+	fmt.Fprintln(stderr, colorizeErr(colorYellow, msg))
 }
 
 func printError(msg string) {
-	fmt.Println(colorize(colorRed, msg))
+	fmt.Fprintln(stderr, colorizeErr(colorRed, msg))
 }
 
 func printInfo(msg string) {
-	fmt.Println(colorize(colorCyan, msg))
+	fmt.Fprintln(stderr, colorizeErr(colorCyan, msg))
 }
 
 func printHeader(msg string) {
-	fmt.Println(colorize(colorBold, msg))
+	fmt.Fprintln(stderr, colorizeErr(colorBold, msg))
 }

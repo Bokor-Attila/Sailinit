@@ -370,7 +370,7 @@ func TestCleanOrphanedProjects(t *testing.T) {
 	}
 
 	// Clean orphaned projects
-	count, err := CleanOrphanedProjects()
+	count, err := CleanOrphanedProjects(false)
 	if err != nil {
 		t.Fatalf("CleanOrphanedProjects failed: %v", err)
 	}
@@ -421,7 +421,7 @@ func TestCleanOrphanedProjectsNoneToClean(t *testing.T) {
 	}
 
 	// Clean - should find nothing to clean
-	count, err := CleanOrphanedProjects()
+	count, err := CleanOrphanedProjects(false)
 	if err != nil {
 		t.Fatalf("CleanOrphanedProjects failed: %v", err)
 	}
@@ -557,7 +557,7 @@ func TestRemoveProject(t *testing.T) {
 	}
 
 	// Remove it
-	if err := RemoveProject(projectDir); err != nil {
+	if err := RemoveProject(projectDir, false); err != nil {
 		t.Fatalf("RemoveProject failed: %v", err)
 	}
 
@@ -577,7 +577,7 @@ func TestRemoveProjectNotRegistered(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := RemoveProject(projectDir)
+	err := RemoveProject(projectDir, false)
 	if err == nil {
 		t.Error("Expected error when removing unregistered project")
 	}
@@ -643,6 +643,8 @@ func TestPortStatePathBackwardsCompatibility(t *testing.T) {
 	testStatePathOverride = ""
 	defer func() { testStatePathOverride = origOverride }()
 
+	t.Setenv("SAILINIT_HOME", "")
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -677,5 +679,125 @@ func TestGlobalConfigOverrides(t *testing.T) {
 	ports := CalculatePorts(10)
 	if ports["APP_PORT"] != 9510 {
 		t.Errorf("Expected calculated APP_PORT 9510, got %d", ports["APP_PORT"])
+	}
+}
+
+func TestSailinitHomeOverridesStatePath(t *testing.T) {
+	origOverride := testStatePathOverride
+	testStatePathOverride = ""
+	defer func() { testStatePathOverride = origOverride }()
+
+	tempDir := t.TempDir()
+	sandbox := filepath.Join(tempDir, "sandbox")
+	t.Setenv("SAILINIT_HOME", sandbox)
+
+	path, err := getPortStatePath()
+	if err != nil {
+		t.Fatalf("getPortStatePath failed: %v", err)
+	}
+
+	want := filepath.Join(sandbox, "ports.json")
+	if path != want {
+		t.Errorf("Expected state path %s, got %s", want, path)
+	}
+
+	// The directory must be created so a save into a fresh SAILINIT_HOME works.
+	if info, err := os.Stat(sandbox); err != nil || !info.IsDir() {
+		t.Errorf("Expected SAILINIT_HOME directory to be created, got err=%v", err)
+	}
+}
+
+func TestSailinitHomeBeatsLegacyStateFile(t *testing.T) {
+	origOverride := testStatePathOverride
+	testStatePathOverride = ""
+	defer func() { testStatePathOverride = origOverride }()
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(home, ".laravel-sail-ports.json")
+	if _, err := os.Stat(legacyPath); err != nil {
+		// Only meaningful when a legacy registry actually exists on this machine.
+		t.Skip("no legacy registry present, nothing to shadow")
+	}
+
+	sandbox := t.TempDir()
+	t.Setenv("SAILINIT_HOME", sandbox)
+
+	path, err := getPortStatePath()
+	if err != nil {
+		t.Fatalf("getPortStatePath failed: %v", err)
+	}
+	if path == legacyPath {
+		t.Errorf("SAILINIT_HOME was ignored in favour of the legacy registry %s", legacyPath)
+	}
+	if path != filepath.Join(sandbox, "ports.json") {
+		t.Errorf("Expected sandboxed path, got %s", path)
+	}
+}
+
+func TestSailinitHomeIsolatesRegistryWrites(t *testing.T) {
+	origOverride := testStatePathOverride
+	testStatePathOverride = ""
+	defer func() { testStatePathOverride = origOverride }()
+
+	sandbox := t.TempDir()
+	t.Setenv("SAILINIT_HOME", sandbox)
+
+	projectDir := t.TempDir()
+	if err := saveProjectSuffix(projectDir, 77); err != nil {
+		t.Fatalf("saveProjectSuffix failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(sandbox, "ports.json"))
+	if err != nil {
+		t.Fatalf("expected registry inside SAILINIT_HOME: %v", err)
+	}
+	if !strings.Contains(string(data), projectDir) {
+		t.Errorf("Expected project %s in sandboxed registry, got %s", projectDir, data)
+	}
+}
+
+func TestSailinitHomeOverridesConfigPath(t *testing.T) {
+	sandbox := t.TempDir()
+	t.Setenv("SAILINIT_HOME", sandbox)
+
+	want := filepath.Join(sandbox, "config.json")
+	if got := getGlobalConfigPath(); got != want {
+		t.Errorf("Expected config path %s, got %s", want, got)
+	}
+}
+
+func TestSailinitHomeConfigIsLoaded(t *testing.T) {
+	sandbox := t.TempDir()
+	t.Setenv("SAILINIT_HOME", sandbox)
+
+	cfg := `{"base_app_port": 9700}`
+	if err := os.WriteFile(filepath.Join(sandbox, "config.json"), []byte(cfg), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := loadGlobalConfig().BaseAppPort; got != 9700 {
+		t.Errorf("Expected BaseAppPort 9700 from SAILINIT_HOME config, got %d", got)
+	}
+}
+
+func TestSailinitHomeUnsetKeepsDefaultDiscovery(t *testing.T) {
+	origOverride := testStatePathOverride
+	testStatePathOverride = ""
+	defer func() { testStatePathOverride = origOverride }()
+
+	t.Setenv("SAILINIT_HOME", "")
+
+	path, err := getPortStatePath()
+	if err != nil {
+		t.Fatalf("getPortStatePath failed: %v", err)
+	}
+	if !strings.HasSuffix(path, ".json") {
+		t.Errorf("Expected a json path from default discovery, got %s", path)
+	}
+	if strings.Contains(path, "SAILINIT_HOME") {
+		t.Errorf("Unexpected path %s", path)
 	}
 }

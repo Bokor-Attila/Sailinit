@@ -120,23 +120,39 @@ func TestRunOpenFallsBackWhenOpenerMissing(t *testing.T) {
 	}
 }
 
-func TestContainerRunning(t *testing.T) {
+func TestContainerStatusIsRunning(t *testing.T) {
 	tests := []struct {
-		status string
+		status ContainerStatus
 		want   bool
 	}{
-		{"3 running", true},
-		{colorize(colorGreen, "2 running"), true},
-		{"stopped", false},
-		{colorize(colorDim, "stopped"), false},
-		{"no sail", false},
-		{"unknown", false},
+		{ContainerStatus{State: stateRunning, Running: 3}, true},
+		{ContainerStatus{State: stateRunning, Running: 1}, true},
+		{ContainerStatus{State: stateStopped}, false},
+		{ContainerStatus{State: stateNoSail}, false},
+		{ContainerStatus{State: stateUnknown}, false},
+		{ContainerStatus{State: stateMissing}, false},
 	}
 
 	for _, tc := range tests {
-		if got := containerRunning(tc.status); got != tc.want {
-			t.Errorf("containerRunning(%q) = %v, want %v", tc.status, got, tc.want)
+		if got := tc.status.IsRunning(); got != tc.want {
+			t.Errorf("ContainerStatus%+v.IsRunning() = %v, want %v", tc.status, got, tc.want)
 		}
+	}
+}
+
+// The status must never be decided by pattern-matching a rendered string: that
+// is how ANSI codes ended up inside the JSON output.
+func TestContainerStatusDisplayCarriesNoColorIntoState(t *testing.T) {
+	orig := colorsEnabled
+	colorsEnabled = true
+	defer func() { colorsEnabled = orig }()
+
+	status := ContainerStatus{State: stateRunning, Running: 2}
+	if !strings.Contains(status.Display(), "2 running") {
+		t.Errorf("Display() = %q, want it to mention the count", status.Display())
+	}
+	if strings.Contains(status.State, "\033") {
+		t.Errorf("State %q must stay free of escape codes", status.State)
 	}
 }
 
