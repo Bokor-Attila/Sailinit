@@ -42,6 +42,18 @@ agents. Each is a deliberate break:
 
 ## Installation
 
+### Quick Install (macOS / Linux)
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bokor-Attila/Sailinit/main/install.sh | sh
+```
+
+Downloads the latest release for your platform, verifies it against
+`sha256sums.txt`, and installs it to `/usr/local/bin` (prompting for sudo only if
+that directory isn't writable). Set `SAILINIT_INSTALL_DIR` to install elsewhere:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bokor-Attila/Sailinit/main/install.sh | SAILINIT_INSTALL_DIR="$HOME/.local/bin" sh
+```
+
 ### From Source
 1. Clone the repository.
 2. Build the binary:
