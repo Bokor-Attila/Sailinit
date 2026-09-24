@@ -21,6 +21,7 @@ A Go-based tool to automate the initialization of Laravel Sail projects with int
 - **Quick Open**: `--open` launches the current project's URL in your browser.
 - **Scriptable Output**: data on stdout, messages on stderr, and distinct exit codes per outcome.
 - **Isolated State**: point `SAILINIT_HOME` at any directory to sandbox the registry and config.
+- **Claude Code Skill**: `--install-skill` teaches Claude Code how to drive `sailinit`; `--upgrade` keeps it current.
 
 ## Breaking Changes
 
@@ -115,6 +116,9 @@ sailinit [flags] [php_version]
 | `--dry-run` | `-d` | Show what would happen without making changes |
 | `--open` | `-o` | Open the current project's URL in the default browser |
 | `--doctor` | | Run diagnostics on the port registry and the current project |
+| `--install-skill` | | Install the Claude Code skill for `sailinit` |
+| `--uninstall-skill` | | Remove the Claude Code skill installed by `--install-skill` |
+| `--refresh-skill` | | Update an installed Claude Code skill to this version |
 | `--upgrade` | `-u` | Download and install the latest release over the running binary |
 | `--completion <shell>` | | Generate shell completion script (`bash`, `zsh`, `fish`) |
 
@@ -335,6 +339,7 @@ What it checks:
 | Current project | WARN | This Laravel project is not registered yet |
 | `.env` ports | FAIL | `.env` and the registry disagree about `APP_PORT` |
 | Port availability | WARN | Something already holds one of this project's ports |
+| Claude skill | WARN | The installed skill is out of date, locally edited, or was removed |
 
 **Exit code** is `4` if any check FAILs and `0` otherwise, so `--doctor` works as
 a CI or pre-flight gate. `4` is distinct from `1` so a gate can tell "doctor
@@ -387,6 +392,39 @@ Notes:
   override.
 - Symlinked installs are resolved first, so the real binary is replaced rather
   than the symlink.
+
+### Claude Code Skill
+
+```bash
+sailinit --install-skill
+```
+
+Installs a [Claude Code skill](https://docs.claude.com/en/docs/claude-code/skills)
+at `~/.claude/skills/sailinit/SKILL.md` (or under `$CLAUDE_CONFIG_DIR`). It tells
+Claude when to reach for `sailinit`, to always pass `-y` and `-j`, how to read
+the exit codes, and which commands to confirm with you before running. The skill
+text is built into the binary, so it always matches the version you run.
+
+It is opt-in and tracked: `sailinit` records the file's hash in `skill.json` next
+to the registry (so `SAILINIT_HOME` isolates it too), and uses it to keep the
+skill current without clobbering your changes:
+
+| Situation | `--upgrade` / `--refresh-skill` |
+|---|---|
+| Never installed | Does nothing |
+| Installed and untouched | Rewrites it with the new version |
+| You edited it | Leaves it alone and warns |
+| You deleted it | Leaves it deleted |
+
+`--upgrade` runs the *new* binary's `--refresh-skill` after the swap, since the
+old one still carries the old skill. Under `sudo` it skips this and tells you to
+run `sailinit --refresh-skill` yourself, so no root-owned files end up in your
+home directory.
+
+`--install-skill` asks before replacing a file it did not write (or one you
+edited); `-y` skips the question. `--uninstall-skill` removes only the file it
+installed. Both accept `--dry-run`. `--doctor` reports whether the skill is
+current.
 
 ### Custom Base Port Offsets
 

@@ -95,6 +95,10 @@ func installFixture(t *testing.T, content string) string {
 func withUpgradeEnv(t *testing.T, apiBase, ver, exePath, reportVersion string) {
 	t.Helper()
 
+	// A successful upgrade consults the Claude skill tracking file; keep it
+	// away from the real one.
+	t.Setenv("SAILINIT_HOME", t.TempDir())
+
 	origAPI := updateAPIBase
 	origVersion := version
 	origOutputRunner := execOutputRunner
