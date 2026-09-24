@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -119,7 +120,7 @@ _sailinit() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --json -j --port -p --ports --upgrade -u --open -o --doctor --completion"
+    opts="--version -v --list -l --status -s --clean -c --remove -r --stop --down --fresh -f --reset-db --dry-run -d --yes -y --non-interactive --new -n --with -w --json -j --port -p --ports --upgrade -u --open -o --doctor --install-skill --uninstall-skill --refresh-skill --completion"
 
     if [[ ${cur} == -* ]] ; then
         COMPREPLY=( $(compgen -W "${opts}" -- ${cur}) )
@@ -154,6 +155,9 @@ _sailinit() {
         '(-u --upgrade)'{-u,--upgrade}'[Download and install the latest release]'
         '(-o --open)'{-o,--open}'[Open the current project URL in the browser]'
         '--doctor[Run diagnostics on the registry and current project]'
+        '--install-skill[Install the Claude Code skill for sailinit]'
+        '--uninstall-skill[Remove the Claude Code skill]'
+        '--refresh-skill[Update an installed Claude Code skill to this version]'
         '--completion[Generate shell completion script]:shell:(bash zsh fish)'
     )
     _describe -t commands 'sailinit flags' options
@@ -182,6 +186,9 @@ complete -c sailinit -l ports -d 'Print every calculated port for the current pr
 complete -c sailinit -s u -l upgrade -d 'Download and install the latest release'
 complete -c sailinit -s o -l open -d 'Open the current project URL in the browser'
 complete -c sailinit -l doctor -d 'Run diagnostics on the registry and current project'
+complete -c sailinit -l install-skill -d 'Install the Claude Code skill for sailinit'
+complete -c sailinit -l uninstall-skill -d 'Remove the Claude Code skill'
+complete -c sailinit -l refresh-skill -d 'Update an installed Claude Code skill to this version'
 complete -c sailinit -l completion -r -f -a 'bash zsh fish' -d 'Generate shell completion script'
 `)
 	default:
@@ -192,26 +199,29 @@ complete -c sailinit -l completion -r -f -a 'bash zsh fish' -d 'Generate shell c
 
 func main() {
 	var (
-		versionFlag    bool
-		listFlag       bool
-		statusFlag     bool
-		cleanFlag      bool
-		removeFlag     bool
-		stopFlag       bool
-		downFlag       bool
-		freshFlag      bool
-		resetDbFlag    bool
-		dryRunFlag     bool
-		yesFlag        bool
-		jsonFlag       bool
-		portFlag       bool
-		portsFlag      bool
-		upgradeFlag    bool
-		openFlag       bool
-		doctorFlag     bool
-		newFlag        string
-		withFlag       string
-		completionFlag string
+		versionFlag        bool
+		listFlag           bool
+		statusFlag         bool
+		cleanFlag          bool
+		removeFlag         bool
+		stopFlag           bool
+		downFlag           bool
+		freshFlag          bool
+		resetDbFlag        bool
+		dryRunFlag         bool
+		yesFlag            bool
+		jsonFlag           bool
+		portFlag           bool
+		portsFlag          bool
+		upgradeFlag        bool
+		openFlag           bool
+		doctorFlag         bool
+		installSkillFlag   bool
+		uninstallSkillFlag bool
+		refreshSkillFlag   bool
+		newFlag            string
+		withFlag           string
+		completionFlag     string
 	)
 
 	flag.BoolVar(&versionFlag, "version", false, "Print version and exit")
@@ -267,6 +277,10 @@ func main() {
 
 	flag.BoolVar(&doctorFlag, "doctor", false, "Run diagnostics on the port registry and the current project")
 
+	flag.BoolVar(&installSkillFlag, "install-skill", false, "Install the Claude Code skill for sailinit into ~/.claude/skills")
+	flag.BoolVar(&uninstallSkillFlag, "uninstall-skill", false, "Remove the Claude Code skill installed by --install-skill")
+	flag.BoolVar(&refreshSkillFlag, "refresh-skill", false, "Update an installed Claude Code skill to this version (run by --upgrade)")
+
 	flag.Parse()
 
 	// Handle --completion flag
@@ -286,6 +300,28 @@ func main() {
 	if upgradeFlag {
 		if err := runUpgrade(dryRunFlag, yesFlag); err != nil {
 			printError(fmt.Sprintf("Upgrade failed: %v", err))
+			os.Exit(exitError)
+		}
+		os.Exit(exitOK)
+	}
+
+	// Handle the Claude skill flags. Like --upgrade they work from any directory.
+	if installSkillFlag || uninstallSkillFlag || refreshSkillFlag {
+		var err error
+		switch {
+		case installSkillFlag:
+			err = installSkill(dryRunFlag, yesFlag)
+		case uninstallSkillFlag:
+			err = uninstallSkill(dryRunFlag, yesFlag)
+		default:
+			err = refreshSkill(dryRunFlag)
+		}
+		if errors.Is(err, errSkillAborted) {
+			printError("Aborted.")
+			os.Exit(exitAborted)
+		}
+		if err != nil {
+			printError(fmt.Sprintf("Claude skill: %v", err))
 			os.Exit(exitError)
 		}
 		os.Exit(exitOK)

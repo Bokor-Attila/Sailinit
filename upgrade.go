@@ -368,5 +368,6 @@ func runUpgrade(dryRun, assumeYes bool) error {
 	}
 
 	printSuccess(fmt.Sprintf("Upgraded sailinit %s -> %s (%s)", version, rel.TagName, exePath))
+	refreshSkillAfterUpgrade(exePath)
 	return nil
 }

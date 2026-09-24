@@ -223,6 +223,7 @@ func runDoctor(projectDir string, jsonFormat bool) bool {
 	diags = append(diags, checkDuplicateSuffixes())
 	diags = append(diags, checkOrphans())
 	diags = append(diags, checkCurrentProject(projectDir)...)
+	diags = append(diags, checkSkill())
 
 	healthy := true
 	for _, d := range diags {
